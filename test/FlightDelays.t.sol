@@ -30,7 +30,7 @@ contract FlightDelaysTest is Test {
     bytes32 internal constant AIRLINE_ID = keccak256("ALPHA");
     bytes32 internal constant FLIGHT_ID = keccak256("ALPHA-001");
     uint48 internal constant POLICY_WINDOW = uint48(2 minutes);
-    uint48 internal constant DELAY_WINDOW = uint48(1 minutes);
+    uint48 internal constant DELAY_WINDOW = uint48(30 seconds);
     uint48 internal constant DEPARTURE_OFFSET = uint48(15 minutes);
     uint48 internal departure;
 
@@ -75,7 +75,7 @@ contract FlightDelaysTest is Test {
         _createFlight();
         _fundLatestVault(1000 ether);
 
-        vm.warp(departure - 2 minutes);
+        vm.warp(departure - 30 seconds);
 
         flightDelays.buyInsurance(AIRLINE_ID, FLIGHT_ID);
 
@@ -93,7 +93,7 @@ contract FlightDelaysTest is Test {
         _createFlight();
         _fundLatestVault(1000 ether);
 
-        vm.warp(departure - 2 minutes);
+        vm.warp(departure - 30 seconds);
 
         flightDelays.buyInsurance(AIRLINE_ID, FLIGHT_ID);
         vm.expectRevert(FlightDelays.FlightAlreadyExists.selector);
@@ -114,7 +114,7 @@ contract FlightDelaysTest is Test {
         _createFlight();
         _fundLatestVault(500 ether);
 
-        vm.warp(departure - 2 minutes);
+        vm.warp(departure - 30 seconds);
 
         flightDelays.buyInsurance(AIRLINE_ID, FLIGHT_ID);
 
