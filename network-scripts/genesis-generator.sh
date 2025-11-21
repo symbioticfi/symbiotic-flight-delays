@@ -13,12 +13,12 @@ while [ $attempt -le $MAX_RETRIES ]; do
     echo "Attempt $attempt of $MAX_RETRIES: Generating network genesis..."
 
     if /app/relay_utils network \
-            --chains http://anvil:8545,http://anvil-settlement:8546 \
+            --chains http://anvil:8545 \
             --driver.address "$DRIVER_ADDRESS" \
             --driver.chainid 31337 \
           generate-genesis \
             --commit \
-            --secret-keys 31337:0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80,31338:0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80; then
+            --secret-keys 31337:0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80; then
         echo 'Genesis generation completed successfully!'
 
         # Create genesis completion marker

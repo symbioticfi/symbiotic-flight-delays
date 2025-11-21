@@ -33,7 +33,6 @@ p2p:
 evm:
   chains:
     - "http://anvil:8545"
-    - "http://anvil-settlement:8546"
   max-calls: 30
 EOFCONFIG
 

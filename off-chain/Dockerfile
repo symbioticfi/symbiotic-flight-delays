@@ -17,11 +17,16 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the application with optimizations for production
+# Build the binaries with optimizations for production
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags="-w -s" \
-    -o /app/sum-node \
+    -o /app/flight-node \
     ./cmd/node
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-w -s" \
+    -o /app/flights-api \
+    ./cmd/flights-api
 
 # Runtime stage
 FROM alpine:3.19
@@ -32,14 +37,15 @@ RUN apk add --no-cache ca-certificates tzdata
 # Set working directory
 WORKDIR /app
 
-# Copy binary from builder stage
-COPY --from=builder /app/sum-node .
+# Copy binaries from builder stage
+COPY --from=builder /app/flight-node .
+COPY --from=builder /app/flights-api .
 
 # Expose port if needed (adjust based on your application)
 # EXPOSE 8080
 
 # Set the entrypoint
-ENTRYPOINT ["./sum-node"]
+ENTRYPOINT ["/app/flight-node"]
 
 # Default command (can be overridden)
 CMD ["--help"]

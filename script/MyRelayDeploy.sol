@@ -380,6 +380,7 @@ contract MyRelayDeploy is RelayDeploy {
             vm.stopBroadcast();
 
             config.set("flight_delays", flightDelays);
+            vm.writeFile("temp-network/deploy-data/flight-delays.address", vm.toString(flightDelays));
         }
 
         fundOperators();

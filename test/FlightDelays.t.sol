@@ -116,10 +116,10 @@ contract FlightDelaysTest is Test {
         flightDelays.buyInsurance(AIRLINE_ID, FLIGHT_ID);
 
         vm.warp(departure + 1);
-        flightDelays.completeFlight(AIRLINE_ID, FLIGHT_ID, 1, "");
+        flightDelays.departFlight(AIRLINE_ID, FLIGHT_ID, 1, "");
 
         (uint48 timestamp, FlightDelays.FlightStatus status,,) = flightDelays.flights(AIRLINE_ID, FLIGHT_ID);
-        assertEq(uint8(status), uint8(FlightDelays.FlightStatus.COMPLETED));
+        assertEq(uint8(status), uint8(FlightDelays.FlightStatus.DEPARTED));
         assertEq(timestamp, departure);
 
         MockRewards rewards = rewardsFactory.lastRewards();
@@ -140,7 +140,7 @@ contract FlightDelaysTest is Test {
         vm.expectRevert(FlightDelays.PreviousFlightIncomplete.selector);
         flightDelays.delayFlight(AIRLINE_ID, laterFlightId, 1, "");
 
-        flightDelays.completeFlight(AIRLINE_ID, FLIGHT_ID, 1, "");
+        flightDelays.departFlight(AIRLINE_ID, FLIGHT_ID, 1, "");
 
         flightDelays.delayFlight(AIRLINE_ID, laterFlightId, 1, "");
     }
@@ -153,6 +153,41 @@ contract FlightDelaysTest is Test {
         flightDelays.createFlight(AIRLINE_ID, laterFlightId, departure - 1, 1, "");
 
         flightDelays.createFlight(AIRLINE_ID, laterFlightId, departure + 1, 1, "");
+    }
+
+    function testCannotBuyInsuranceWithoutFlight() public {
+        vm.expectRevert(FlightDelays.FlightNotScheduled.selector);
+        flightDelays.buyInsurance(AIRLINE_ID, FLIGHT_ID);
+    }
+
+    function testCannotBuyBeforePolicyWindowOpens() public {
+        _createFlight();
+        _fundLatestVault(1_000 ether);
+
+        vm.warp(departure - uint256(flightDelays.policyWindow()));
+        vm.expectRevert(FlightDelays.BuyWindowClosed.selector);
+        flightDelays.buyInsurance(AIRLINE_ID, FLIGHT_ID);
+    }
+
+    function testCannotBuyAfterWindowCloses() public {
+        _createFlight();
+        _fundLatestVault(1_000 ether);
+
+        uint256 cutoff = departure - uint256(flightDelays.delayWindow()) + 1;
+        vm.warp(cutoff);
+        vm.expectRevert(FlightDelays.BuyWindowClosed.selector);
+        flightDelays.buyInsurance(AIRLINE_ID, FLIGHT_ID);
+    }
+
+    function testCannotBuyOnceFlightDelayed() public {
+        _createFlight();
+        _fundLatestVault(1_000 ether);
+
+        vm.warp(departure - 2 days);
+        flightDelays.delayFlight(AIRLINE_ID, FLIGHT_ID, 1, "");
+
+        vm.expectRevert(FlightDelays.FlightNotScheduled.selector);
+        flightDelays.buyInsurance(AIRLINE_ID, FLIGHT_ID);
     }
 
     function _createFlight() internal {

@@ -1,0 +1,12 @@
+[
+  { "type": "function", "name": "claimable", "stateMutability": "view", "inputs": [
+      { "name": "token", "type": "address" },
+      { "name": "account", "type": "address" },
+      { "name": "data", "type": "bytes" }
+    ], "outputs": [{ "name": "", "type": "uint256" }] },
+  { "type": "function", "name": "claimRewards", "stateMutability": "nonpayable", "inputs": [
+      { "name": "recipient", "type": "address" },
+      { "name": "token", "type": "address" },
+      { "name": "data", "type": "bytes" }
+    ], "outputs": [] }
+]

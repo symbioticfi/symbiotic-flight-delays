@@ -6,7 +6,7 @@
 
 set -e
 
-# Define the image tag for the relay service, that the current sum node is compatible with
+# Define the image tag for the relay service, that the current flight node is compatible with
 RELAY_IMAGE_TAG="0.3.0"
 
 RED='\033[0;31m'
@@ -124,7 +124,6 @@ generate_docker_compose() {
     done
 
     local anvil_port=8545
-    local anvil_settlement_port=8546
     local relay_start_port=8081
     local sum_start_port=9091
 
@@ -144,24 +143,6 @@ services:
       - symbiotic-network
     healthcheck:
       test: ["CMD", "cast", "client", "--rpc-url", "http://localhost:8545"]
-      interval: 2s
-      timeout: 1s
-      retries: 10
-
-  # Settlement Anvil local Ethereum network (Chain ID: 31338)
-  anvil-settlement:
-    image: ghcr.io/foundry-rs/foundry:v1.4.3
-    container_name: symbiotic-anvil-settlement
-    entrypoint: ["anvil"]
-    command: "--port 8546 --chain-id 31338 --timestamp 1754051800 --auto-impersonate --slots-in-an-epoch 1 --accounts 10 --balance 10000 --gas-limit 30000000 --gas-price 10000000"
-    environment:
-      - ANVIL_IP_ADDR=0.0.0.0
-    ports:
-      - "8546:8546"
-    networks:
-      - symbiotic-network
-    healthcheck:
-      test: ["CMD", "cast", "client", "--rpc-url", "http://localhost:8546"]
       interval: 2s
       timeout: 1s
       retries: 10
@@ -186,8 +167,6 @@ services:
     depends_on:
       anvil:
         condition: service_healthy
-      anvil-settlement:
-        condition: service_healthy
     networks:
       - symbiotic-network
     environment:
@@ -206,6 +185,21 @@ services:
     command: ./network-scripts/genesis-generator.sh
     depends_on:
       deployer:
+        condition: service_completed_successfully
+    networks:
+      - symbiotic-network
+
+  flights-api:
+    build:
+      context: ../off-chain
+      dockerfile: Dockerfile
+    container_name: symbiotic-flights-api
+    entrypoint: ["/app/flights-api"]
+    command: ["--listen", ":8085"]
+    ports:
+      - "8085:8085"
+    depends_on:
+      genesis-generator:
         condition: service_completed_successfully
     networks:
       - symbiotic-network
@@ -247,7 +241,7 @@ EOF
     container_name: symbiotic-relay-$i
     command:
       - /workspace/network-scripts/sidecar-start.sh
-      - symb/0/15/0x$SYMB_PRIVATE_KEY_HEX,symb/0/11/0x$SYMB_SECONDARY_PRIVATE_KEY_HEX,symb/1/0/0x$SYMB_PRIVATE_KEY_HEX,evm/1/31337/0x$SYMB_PRIVATE_KEY_HEX,evm/1/31338/0x$SYMB_PRIVATE_KEY_HEX,p2p/1/0/$SWARM_KEY,p2p/1/1/$SYMB_PRIVATE_KEY_HEX
+      - symb/0/15/0x$SYMB_PRIVATE_KEY_HEX,symb/0/11/0x$SYMB_SECONDARY_PRIVATE_KEY_HEX,symb/1/0/0x$SYMB_PRIVATE_KEY_HEX,evm/1/31337/0x$SYMB_PRIVATE_KEY_HEX,p2p/1/0/$SWARM_KEY,p2p/1/1/$SYMB_PRIVATE_KEY_HEX
       - /app/$storage_dir
     ports:
       - "$port:8080"
@@ -264,33 +258,34 @@ EOF
 
 EOF
 
-        local relay_port=$((relay_start_port + i - 1))
-        local sum_port=$((sum_start_port + i - 1))
+    done
 
-        cat >> "$network_dir/docker-compose.yml" << EOF
+    FLIGHT_NODE_PRIVATE_KEY_HEX=$(printf "%064x" $BASE_PRIVATE_KEY)
 
-  # Sum node $i
-  sum-node-$i:
+    cat >> "$network_dir/docker-compose.yml" << EOF
+
+  flight-node:
     build:
       context: ../off-chain
       dockerfile: Dockerfile
-    container_name: symbiotic-sum-node-$i
-    entrypoint: ["/workspace/network-scripts/sum-node-start.sh"]
-    command: ["relay-sidecar-$i:8080", "$SYMB_PRIVATE_KEY_HEX"]
+    container_name: symbiotic-flight-node
+    entrypoint: ["/workspace/network-scripts/flight-node-start.sh"]
+    command: ["relay-sidecar-1:8080", "$FLIGHT_NODE_PRIVATE_KEY_HEX"]
+    environment:
+      - FLIGHTS_API_URL=http://flights-api:8085
     volumes:
       - ../:/workspace
       - ./deploy-data:/deploy-data
-    ports:
-      - "$sum_port:8080"
     depends_on:
-      relay-sidecar-$i:
+      relay-sidecar-1:
+        condition: service_started
+      flights-api:
         condition: service_started
     networks:
       - symbiotic-network
     restart: unless-stopped
 
 EOF
-    done
 
     cat >> "$network_dir/docker-compose.yml" << EOF
 
@@ -341,7 +336,7 @@ main() {
     echo
     print_warning "Note: The first startup may take several minutes(2-4mins) as it needs to:"
     echo "  1. Download Docker images"
-    echo "  2. Build the sum-node image"
+    echo "  2. Build the flight-node image"
     echo "  3. Deploy contracts"
     echo "  4. Generate network genesis and fund operators"
     echo

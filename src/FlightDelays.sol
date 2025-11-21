@@ -66,7 +66,7 @@ contract FlightDelays is NetworkManager {
         NONE,
         SCHEDULED,
         DELAYED,
-        COMPLETED
+        DEPARTED
     }
 
     enum PolicyStatus {
@@ -104,7 +104,7 @@ contract FlightDelays is NetworkManager {
     event AirlineVaultDeployed(bytes32 indexed airlineId, address vault, address rewards);
     event FlightCreated(bytes32 indexed airlineId, bytes32 indexed flightId, uint48 scheduledTimestamp);
     event FlightDelayed(bytes32 indexed airlineId, bytes32 indexed flightId);
-    event FlightCompleted(bytes32 indexed airlineId, bytes32 indexed flightId);
+    event FlightDeparted(bytes32 indexed airlineId, bytes32 indexed flightId);
     event InsurancePurchased(
         bytes32 indexed airlineId, bytes32 indexed flightId, address indexed buyer, uint256 premium
     );
@@ -113,7 +113,7 @@ contract FlightDelays is NetworkManager {
     bytes32 internal constant CREATE_MESSAGE_TYPEHASH =
         keccak256("Create(bytes32 airlineId,bytes32 flightId,uint48 departure)");
     bytes32 internal constant DELAY_MESSAGE_TYPEHASH = keccak256("Delay(bytes32 airlineId,bytes32 flightId)");
-    bytes32 internal constant COMPLETE_MESSAGE_TYPEHASH = keccak256("Complete(bytes32 airlineId,bytes32 flightId)");
+    bytes32 internal constant DEPART_MESSAGE_TYPEHASH = keccak256("Depart(bytes32 airlineId,bytes32 flightId)");
 
     address public immutable VAULT_CONFIGURATOR;
     address public immutable DEFAULT_STAKER_REWARDS_FACTORY;
@@ -227,7 +227,7 @@ contract FlightDelays is NetworkManager {
         bytes32 previousFlightId = flight.previousFlightId;
         if (
             previousFlightId != bytes32(0)
-                && (flights[airlineId][previousFlightId].status != FlightStatus.COMPLETED
+                && (flights[airlineId][previousFlightId].status != FlightStatus.DEPARTED
                     && flights[airlineId][previousFlightId].status != FlightStatus.DELAYED)
         ) {
             revert PreviousFlightIncomplete();
@@ -247,26 +247,26 @@ contract FlightDelays is NetworkManager {
         emit FlightDelayed(airlineId, flightId);
     }
 
-    function completeFlight(bytes32 airlineId, bytes32 flightId, uint48 epoch, bytes calldata proof) external {
+    function departFlight(bytes32 airlineId, bytes32 flightId, uint48 epoch, bytes calldata proof) external {
         Flight storage flight = flights[airlineId][flightId];
         if (flight.status != FlightStatus.SCHEDULED) {
             revert FlightNotScheduled();
         }
 
         _verifyFlightMessage(
-            abi.encode(keccak256(abi.encode(COMPLETE_MESSAGE_TYPEHASH, airlineId, flightId))), epoch, proof
+            abi.encode(keccak256(abi.encode(DEPART_MESSAGE_TYPEHASH, airlineId, flightId))), epoch, proof
         );
 
         bytes32 previousFlightId = flight.previousFlightId;
         if (
             previousFlightId != bytes32(0)
-                && (flights[airlineId][previousFlightId].status != FlightStatus.COMPLETED
+                && (flights[airlineId][previousFlightId].status != FlightStatus.DEPARTED
                     && flights[airlineId][previousFlightId].status != FlightStatus.DELAYED)
         ) {
             revert PreviousFlightIncomplete();
         }
 
-        flight.status = FlightStatus.COMPLETED;
+        flight.status = FlightStatus.DEPARTED;
 
         Airline storage airline = airlines[airlineId];
         airline.covered -= flight.policiesSold * policyPayout;
@@ -283,11 +283,15 @@ contract FlightDelays is NetworkManager {
                 );
         }
 
-        emit FlightCompleted(airlineId, flightId);
+        emit FlightDeparted(airlineId, flightId);
     }
 
     function buyInsurance(bytes32 airlineId, bytes32 flightId) external {
         Flight storage flight = flights[airlineId][flightId];
+        if (flight.status != FlightStatus.SCHEDULED) {
+            revert FlightNotScheduled();
+        }
+
         uint48 captureTimestamp = flight.timestamp - policyWindow;
         if (block.timestamp <= captureTimestamp || block.timestamp > flight.timestamp - delayWindow) {
             revert BuyWindowClosed();

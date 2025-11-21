@@ -1,0 +1,19 @@
+[
+  { "type": "function", "name": "deposit", "stateMutability": "nonpayable", "inputs": [
+      { "name": "onBehalfOf", "type": "address" },
+      { "name": "amount", "type": "uint256" }
+    ], "outputs": [
+      { "name": "depositedAmount", "type": "uint256" },
+      { "name": "mintedShares", "type": "uint256" }
+    ] },
+  { "type": "function", "name": "withdraw", "stateMutability": "nonpayable", "inputs": [
+      { "name": "claimer", "type": "address" },
+      { "name": "amount", "type": "uint256" }
+    ], "outputs": [
+      { "name": "burnedShares", "type": "uint256" },
+      { "name": "mintedShares", "type": "uint256" }
+    ] },
+  { "type": "function", "name": "activeBalanceOf", "stateMutability": "view", "inputs": [
+      { "name": "account", "type": "address" }
+    ], "outputs": [{ "name": "", "type": "uint256" }] }
+]

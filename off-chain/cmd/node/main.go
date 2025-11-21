@@ -2,392 +2,523 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/big"
+	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
-	"github.com/ethereum/go-ethereum/core/types"
-
-	"sum/internal/utils"
-
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
-	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/spf13/cobra"
 	v1 "github.com/symbioticfi/relay/api/client/v1"
 
 	"sum/internal/contracts"
-
-	"github.com/ethereum/go-ethereum/common"
-
-	"github.com/ethereum/go-ethereum/ethclient"
-	"github.com/go-errors/errors"
-	"github.com/spf13/cobra"
+	"sum/internal/flights"
+	"sum/internal/utils"
 )
 
 const (
-	TaskCreated uint8 = iota
-	TaskResponded
-	TaskExpired
-	TaskNotFound
+	keyTag    = 15
+	maxUint48 = (1 << 48) - 1
 )
 
 type config struct {
-	relayApiURL       string
-	evmRpcURLs        []string
-	contractAddresses []string
-	privateKey        string
+	relayAPIURL       string
+	evmRPCURL         string
+	contractAddress   string
+	flightsAPIURL     string
+	privateKeyHex     string
+	pollInterval      time.Duration
+	proofPollInterval time.Duration
 	logLevel          string
-}
-
-var relayClient *v1.SymbioticClient
-var evmClients map[int64]*ethclient.Client
-var sumContracts map[int64]*contracts.SumTask
-var lastBlocks map[int64]uint64
-
-func main() {
-	slog.Info("Running sum task off-chain client", "args", os.Args)
-
-	if err := run(); err != nil && !errors.Is(err, context.Canceled) {
-		slog.Error("Error executing command", "error", err)
-		os.Exit(1)
-	}
-	slog.Info("Sum task off-chain client completed successfully")
-}
-
-func run() error {
-	rootCmd.PersistentFlags().StringVarP(&cfg.relayApiURL, "relay-api-url", "r", "", "Relay API URL")
-	rootCmd.PersistentFlags().StringSliceVarP(&cfg.evmRpcURLs, "evm-rpc-urls", "e", []string{}, "EVM RPC URLs separated by comma (e.g., 'https://mainnet.infura.io/v3/,...')")
-	rootCmd.PersistentFlags().StringSliceVarP(&cfg.contractAddresses, "contract-addresses", "a", []string{}, "SumTask contracts' addresses corresponding to the RPC URLs separated by comma (e.g., '0x4826533B4897376654Bb4d4AD88B7faFD0C98528,...')")
-	rootCmd.PersistentFlags().StringVarP(&cfg.privateKey, "private-key", "p", "", "Task response private key")
-	rootCmd.PersistentFlags().StringVarP(&cfg.logLevel, "log-level", "l", "info", "Log level")
-
-	if err := rootCmd.MarkPersistentFlagRequired("relay-api-url"); err != nil {
-		return errors.Errorf("failed to mark relay-api-url as required: %w", err)
-	}
-	if err := rootCmd.MarkPersistentFlagRequired("evm-rpc-urls"); err != nil {
-		return errors.Errorf("failed to mark evm-rpc-urls as required: %w", err)
-	}
-	if err := rootCmd.MarkPersistentFlagRequired("contract-addresses"); err != nil {
-		return errors.Errorf("failed to mark contract-addresses as required: %w", err)
-	}
-	if err := rootCmd.MarkPersistentFlagRequired("private-key"); err != nil {
-		return errors.Errorf("failed to mark private-key as required: %w", err)
-	}
-
-	return rootCmd.Execute()
 }
 
 var cfg config
 
-type TaskState struct {
-	ChainID      int64
-	Task         contracts.SumTaskTask
-	Result       *big.Int
-	SigEpoch     int64
-	SigRequestID string
-	AggProof     []byte
-	Statuses     map[int64]uint8
-}
-
-var tasks map[common.Hash]TaskState
-
-// rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:           "sum-node",
+	Use:           "flight-node",
+	Short:         "Flight delay oracle node",
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		switch cfg.logLevel {
+		switch strings.ToLower(cfg.logLevel) {
 		case "debug":
 			slog.SetLogLoggerLevel(slog.LevelDebug)
-		case "info":
-			slog.SetLogLoggerLevel(slog.LevelInfo)
 		case "warn":
 			slog.SetLogLoggerLevel(slog.LevelWarn)
 		case "error":
 			slog.SetLogLoggerLevel(slog.LevelError)
+		default:
+			slog.SetLogLoggerLevel(slog.LevelInfo)
 		}
 
-		ctx := signalContext(context.Background())
+		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer cancel()
 
-		var err error
-
-		conn, err := utils.GetGRPCConnection(cfg.relayApiURL)
+		conn, err := utils.GetGRPCConnection(cfg.relayAPIURL)
 		if err != nil {
-			return errors.Errorf("failed to create relay client: %w", err)
+			return fmt.Errorf("create relay client: %w", err)
+		}
+		defer conn.Close()
+
+		relayClient := v1.NewSymbioticClient(conn)
+
+		evmClient, err := ethclient.DialContext(ctx, cfg.evmRPCURL)
+		if err != nil {
+			return fmt.Errorf("dial evm rpc: %w", err)
+		}
+		defer evmClient.Close()
+
+		chainID, err := evmClient.ChainID(ctx)
+		if err != nil {
+			return fmt.Errorf("fetch chain id: %w", err)
 		}
 
-		relayClient = v1.NewSymbioticClient(conn)
-
-		if len(cfg.evmRpcURLs) == 0 {
-			return errors.Errorf("no RPC URLs provided")
-		}
-		if len(cfg.contractAddresses) != len(cfg.evmRpcURLs) {
-			return errors.Errorf("mismatched lengths: evm-rpc-urls=%d, contract-addresses=%d", len(cfg.evmRpcURLs), len(cfg.contractAddresses))
-		}
-		evmClients = make(map[int64]*ethclient.Client)
-		sumContracts = make(map[int64]*contracts.SumTask)
-		tasks = make(map[common.Hash]TaskState)
-		lastBlocks = make(map[int64]uint64)
-
-		for i, evmRpcURL := range cfg.evmRpcURLs {
-			evmClient, err := ethclient.DialContext(ctx, evmRpcURL)
-			if err != nil {
-				return errors.Errorf("failed to connect to RPC URL '%s': %w", evmRpcURL, err)
-			}
-
-			chainID, err := evmClient.ChainID(ctx)
-			if err != nil {
-				return errors.Errorf("failed to get chain ID from RPC URL '%s': %w", evmRpcURL, err)
-			}
-
-			addr := common.HexToAddress(cfg.contractAddresses[i])
-			sumContract, err := contracts.NewSumTask(addr, evmClient)
-			if err != nil {
-				return errors.Errorf("failed to create sum contract for %s on chain %d: %w", addr.Hex(), chainID, err)
-			}
-
-			evmClients[chainID.Int64()] = evmClient
-			sumContracts[chainID.Int64()] = sumContract
-
-			finalizedBlockNumber, err := getFinalizedBlockNumber(ctx, evmClient)
-			if err != nil {
-				return errors.Errorf("failed to get finalized block number for chain %d: %w", chainID, err)
-			}
-			lastBlocks[chainID.Int64()] = finalizedBlockNumber
-
-			slog.InfoContext(ctx, "Initialized chain", "chainID", chainID, "finalizedBlock", finalizedBlockNumber, "startBlock", lastBlocks[chainID.Int64()])
+		contractAddr := common.HexToAddress(cfg.contractAddress)
+		flightDelays, err := contracts.NewFlightDelays(contractAddr, evmClient)
+		if err != nil {
+			return fmt.Errorf("bind flight delays: %w", err)
 		}
 
-		ticker := time.NewTicker(1 * time.Second)
-		defer ticker.Stop()
+		flightsClient := newFlightsAPIClient(cfg.flightsAPIURL)
+
+		privKey, err := crypto.HexToECDSA(strings.TrimPrefix(cfg.privateKeyHex, "0x"))
+		if err != nil {
+			return fmt.Errorf("parse private key: %w", err)
+		}
+
+		node := &flightNode{
+			relayClient: relayClient,
+			ethClient:   evmClient,
+			contract:    flightDelays,
+			chainID:     chainID,
+			privateKey:  privKey,
+			flightsAPI:  flightsClient,
+			pending:     make(map[string]*pendingAction),
+		}
+
+		if err := node.syncFlights(ctx); err != nil {
+			slog.Warn("initial sync failed", "error", err)
+		}
+
+		pollTicker := time.NewTicker(cfg.pollInterval)
+		defer pollTicker.Stop()
+		proofTicker := time.NewTicker(cfg.proofPollInterval)
+		defer proofTicker.Stop()
 
 		for {
 			select {
-			case <-ticker.C:
-				for chainID, evmClient := range evmClients {
-					endBlockNumber, err := getFinalizedBlockNumber(ctx, evmClient)
-					if err != nil {
-						return errors.Errorf("failed to get finalized block number for chain %d: %w", chainID, err)
-					}
-
-					lastBlock := lastBlocks[chainID]
-
-					if endBlockNumber < lastBlock {
-						slog.DebugContext(ctx, "Finalized block number is behind last processed block, skipping", "chainID", chainID, "finalizedBlock", endBlockNumber, "lastProcessedBlock", lastBlock)
-						continue
-					}
-
-					slog.DebugContext(ctx, "Fetching events", "chainID", chainID, "fromBlock", lastBlock, "toBlock", endBlockNumber)
-
-					events, err := sumContracts[chainID].FilterCreateTask(&bind.FilterOpts{
-						Context: ctx,
-						Start:   lastBlock,
-						End:     &endBlockNumber,
-					}, [][32]byte{})
-					if err != nil {
-						return errors.Errorf("failed to filter new task created events: %w", err)
-					}
-
-					lastBlocks[chainID] = endBlockNumber + 1
-
-					err = processNewTasks(ctx, chainID, events)
-					if err != nil {
-						fmt.Printf("Error processing new task event: %v\n", err)
-					}
+			case <-pollTicker.C:
+				if err := node.syncFlights(ctx); err != nil {
+					slog.Warn("sync flights failed", "error", err)
 				}
-				err = fetchResults(ctx)
-				if err != nil {
-					fmt.Printf("Error fetching results: %v\n", err)
+			case <-proofTicker.C:
+				if err := node.fetchProofs(ctx); err != nil {
+					slog.Warn("fetch proofs failed", "error", err)
+				}
+				if err := node.submitReadyActions(ctx); err != nil {
+					slog.Warn("submit actions failed", "error", err)
 				}
 			case <-ctx.Done():
+				slog.Info("shutting down flight node")
 				return nil
 			}
 		}
 	},
 }
 
-func getFinalizedBlockNumber(ctx context.Context, evmClient *ethclient.Client) (uint64, error) {
-	// Get finalized block and set starting point to 24 hours ago
-	var raw json.RawMessage
-	err := evmClient.Client().CallContext(ctx, &raw, "eth_getBlockByNumber", "finalized", true)
+func main() {
+	rootCmd.PersistentFlags().StringVar(&cfg.relayAPIURL, "relay-api-url", "", "Relay API URL")
+	rootCmd.PersistentFlags().StringVar(&cfg.evmRPCURL, "evm-rpc-url", "", "Execution client RPC URL")
+	rootCmd.PersistentFlags().StringVar(&cfg.contractAddress, "flight-delays-address", "", "FlightDelays contract address")
+	rootCmd.PersistentFlags().StringVar(&cfg.flightsAPIURL, "flights-api-url", "", "Mock flights API URL")
+	rootCmd.PersistentFlags().StringVar(&cfg.privateKeyHex, "private-key", "", "Flight oracle ECDSA private key")
+	rootCmd.PersistentFlags().DurationVar(&cfg.pollInterval, "poll-interval", 5*time.Second, "Polling interval for flights API")
+	rootCmd.PersistentFlags().DurationVar(&cfg.proofPollInterval, "proof-poll-interval", 3*time.Second, "Polling interval for settlement proofs")
+	rootCmd.PersistentFlags().StringVar(&cfg.logLevel, "log-level", "info", "Log level (debug,info,warn,error)")
+
+	_ = rootCmd.MarkPersistentFlagRequired("relay-api-url")
+	_ = rootCmd.MarkPersistentFlagRequired("evm-rpc-url")
+	_ = rootCmd.MarkPersistentFlagRequired("flight-delays-address")
+	_ = rootCmd.MarkPersistentFlagRequired("flights-api-url")
+	_ = rootCmd.MarkPersistentFlagRequired("private-key")
+
+	if err := rootCmd.Execute(); err != nil {
+		slog.Error("node failed", "error", err)
+		os.Exit(1)
+	}
+}
+
+var (
+	bytes32Type     = mustABIType("bytes32")
+	uint48Type      = mustABIType("uint48")
+	outerArgs       = abi.Arguments{{Type: bytes32Type}}
+	createInnerArgs = abi.Arguments{{Type: bytes32Type}, {Type: bytes32Type}, {Type: bytes32Type}, {Type: uint48Type}}
+	statusInnerArgs = abi.Arguments{{Type: bytes32Type}, {Type: bytes32Type}, {Type: bytes32Type}}
+	createTypehash  = crypto.Keccak256Hash([]byte("Create(bytes32 airlineId,bytes32 flightId,uint48 departure)"))
+	delayTypehash   = crypto.Keccak256Hash([]byte("Delay(bytes32 airlineId,bytes32 flightId)"))
+	departTypehash  = crypto.Keccak256Hash([]byte("Depart(bytes32 airlineId,bytes32 flightId)"))
+)
+
+func mustABIType(name string) abi.Type {
+	t, err := abi.NewType(name, "", nil)
 	if err != nil {
-		return 0, errors.Errorf("failed to get finalized block number: %w", err)
+		panic(err)
 	}
-	var head *types.Header
-	if err := json.Unmarshal(raw, &head); err != nil {
-		return 0, errors.Errorf("failed to unmarshal finalized block: %w", err)
-	}
-
-	return head.Number.Uint64(), nil
+	return t
 }
 
-func fetchResults(ctx context.Context) error {
-	for taskID, state := range tasks {
-		for chainID := range sumContracts {
-			if state.Statuses[chainID] == TaskResponded {
-				continue
-			}
-			status, err := sumContracts[chainID].GetTaskStatus(&bind.CallOpts{
-				Context: ctx,
-			}, taskID)
-			if err != nil {
-				return err
-			}
-			state.Statuses[chainID] = status
-		}
-		slog.InfoContext(ctx, "Task statuses", "taskID", taskID.Hex(), "statuses", state.Statuses)
-		allNotFoundOrExpired := true
-		allResponded := true
-		for _, status := range state.Statuses {
-			if status != TaskNotFound && status != TaskExpired {
-				allNotFoundOrExpired = false
-			}
-			if status != TaskResponded {
-				allResponded = false
-			}
-		}
-		if allNotFoundOrExpired || allResponded {
-			delete(tasks, taskID)
-			continue
-		}
-		if state.AggProof == nil {
-			resp, err := relayClient.GetAggregationProof(ctx, &v1.GetAggregationProofRequest{
-				RequestId: state.SigRequestID,
-			})
-			if err != nil {
-				//		slog.InfoContext(ctx, "Failed to fetch aggregation proof", "err", err)
-				continue
-			}
-			state.AggProof = resp.AggregationProof.Proof
-			slog.InfoContext(ctx, "Got aggregation proof", "taskID", taskID.Hex(), "proof", hexutil.Encode(resp.AggregationProof.Proof))
-		}
+type actionType string
 
-		tasks[taskID] = state
+type flightStatus uint8
 
-		err := processProof(ctx, taskID)
-		if err != nil {
-			fmt.Printf("Error processing proof: %v\n", err)
-		}
-	}
-	return nil
+const (
+	actionCreate actionType = "CREATE"
+	actionDelay  actionType = "DELAY"
+	actionDepart actionType = "DEPART"
+
+	statusNone     flightStatus = 0
+	statusScheduled flightStatus = 1
+	statusDelayed  flightStatus = 2
+	statusDeparted flightStatus = 3
+)
+
+type pendingAction struct {
+	Key          string
+	Airline      flights.Airline
+	Flight       flights.Flight
+	AirlineHash  common.Hash
+	FlightHash   common.Hash
+	Type         actionType
+	Epoch        uint64
+	RequestID    string
+	Proof        []byte
+	Submitted    bool
+	TargetStatus flightStatus
+	TxHash       common.Hash
+	CreatedAt    time.Time
 }
 
-func processProof(ctx context.Context, taskID common.Hash) error {
-	pk, err := crypto.HexToECDSA(cfg.privateKey)
+type flightNode struct {
+	relayClient *v1.SymbioticClient
+	ethClient   *ethclient.Client
+	contract    *contracts.FlightDelays
+	chainID     *big.Int
+	privateKey  *ecdsa.PrivateKey
+	flightsAPI  *flightsAPIClient
+
+	pending map[string]*pendingAction
+}
+
+func (n *flightNode) syncFlights(ctx context.Context) error {
+	airlines, err := n.flightsAPI.ListAirlines(ctx)
 	if err != nil {
-		return errors.Errorf("failed to parse private key: %w", err)
+		return fmt.Errorf("list airlines: %w", err)
 	}
-	task := tasks[taskID]
-	for chainID, status := range task.Statuses {
-		if status == TaskResponded {
+	for _, airline := range airlines {
+		flightsForAirline, err := n.flightsAPI.ListFlights(ctx, airline.AirlineID)
+		if err != nil {
+			slog.Warn("list flights failed", "airline", airline.AirlineID, "error", err)
 			continue
 		}
-		txOpts, err := bind.NewKeyedTransactorWithChainID(pk, big.NewInt(chainID))
-		if err != nil {
-			return errors.Errorf("failed to create transactor: %w", err)
-		}
-		txOpts.Context = ctx
-
-		tx, err := sumContracts[chainID].RespondTask(txOpts, taskID, task.Result, big.NewInt(task.SigEpoch), task.AggProof)
-		if err != nil {
-			return errors.Errorf("failed to respond task: %w", err)
-		}
-
-		slog.InfoContext(ctx, "Submitted response tx", "taskID", taskID.Hex(), "tx", tx.Hash().String(), "gas", tx.Gas())
-	}
-	return nil
-}
-
-func processNewTasks(ctx context.Context, chainID int64, iter *contracts.SumTaskCreateTaskIterator) error {
-	for iter.Next() {
-		evt := iter.Event
-		status, err := sumContracts[chainID].GetTaskStatus(&bind.CallOpts{
-			Context: ctx,
-		}, evt.TaskId)
-		if err != nil {
-			return err
-		}
-
-		if status != TaskCreated {
-			// skip if task is not in created state
-			continue
-		}
-
-		slog.InfoContext(ctx, "Received new task", "taskID", common.Hash(evt.TaskId).Hex(), "task", evt.Task)
-
-		bytes32T, _ := abi.NewType("bytes32", "", nil)
-		uint256T, _ := abi.NewType("uint256", "", nil)
-
-		args := abi.Arguments{
-			{Type: bytes32T},
-			{Type: uint256T},
-		}
-
-		taskResult := new(big.Int).Add(evt.Task.NumberA, evt.Task.NumberB)
-
-		slog.InfoContext(ctx, "New task result", "result", taskResult.String())
-
-		msg, err := args.Pack(evt.TaskId, taskResult)
-		if err != nil {
-			return err
-		}
-
-		slog.InfoContext(ctx, "New task result to sign", "message", hexutil.Encode(msg))
-
-		suggestedEpoch := uint64(0)
-		epochInfos, err := relayClient.GetLastAllCommitted(ctx, &v1.GetLastAllCommittedRequest{})
-		if err != nil {
-			return err
-		} else {
-			for _, info := range epochInfos.EpochInfos {
-				if suggestedEpoch == 0 || info.GetLastCommittedEpoch() < suggestedEpoch {
-					suggestedEpoch = info.GetLastCommittedEpoch()
-				}
+		for _, flight := range flightsForAirline {
+			if err := n.evaluateFlight(ctx, airline, flight); err != nil {
+				slog.Warn("evaluate flight failed", "airline", airline.AirlineID, "flight", flight.FlightID, "error", err)
 			}
 		}
-
-		resp, err := relayClient.SignMessage(ctx, &v1.SignMessageRequest{
-			KeyTag:        15,
-			Message:       msg,
-			RequiredEpoch: &suggestedEpoch,
-		})
-		if err != nil {
-			return err
-		}
-
-		tasks[evt.TaskId] = TaskState{
-			ChainID:      chainID,
-			Task:         evt.Task,
-			Result:       taskResult,
-			SigEpoch:     int64(resp.Epoch),
-			SigRequestID: resp.RequestId,
-			AggProof:     nil,
-			Statuses:     map[int64]uint8{},
-		}
-
-		slog.InfoContext(ctx, "New task result signed", "resp", resp)
 	}
 	return nil
 }
 
-func signalContext(ctx context.Context) context.Context {
-	cnCtx, cancel := context.WithCancel(ctx)
+func (n *flightNode) evaluateFlight(ctx context.Context, airline flights.Airline, flight flights.Flight) error {
+	airlineHash := hashIdentifier(airline.AirlineID)
+	flightHash := hashIdentifier(flight.FlightID)
 
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, syscall.SIGTERM, syscall.SIGINT)
+	info, err := n.contract.Flights(&bind.CallOpts{Context: ctx}, airlineHash, flightHash)
+	if err != nil {
+		return fmt.Errorf("read flight state: %w", err)
+	}
 
-	go func() {
-		sig := <-c
-		slog.WarnContext(ctx, "Received signal", "signal", sig)
-		cancel()
-	}()
+	onChainStatus := flightStatus(info.Status)
+	n.clearSatisfiedPending(airlineHash, flightHash, onChainStatus)
 
-	return cnCtx
+	nextAction, ok := determineAction(flight.Status, onChainStatus)
+	if !ok {
+		return nil
+	}
+
+	key := actionKey(airlineHash, flightHash, nextAction)
+	if _, exists := n.pending[key]; exists {
+		return nil
+	}
+
+	return n.enqueueAction(ctx, key, nextAction, airline, flight, airlineHash, flightHash)
+}
+
+func determineAction(apiStatus flights.Status, onChain flightStatus) (actionType, bool) {
+	switch onChain {
+	case statusNone:
+		if apiStatus == flights.StatusScheduled || apiStatus == flights.StatusDelayed || apiStatus == flights.StatusDeparted {
+			return actionCreate, true
+		}
+	case statusScheduled:
+		switch apiStatus {
+		case flights.StatusDelayed:
+			return actionDelay, true
+		case flights.StatusDeparted:
+			return actionDepart, true
+		}
+	}
+	return "", false
+}
+
+func (n *flightNode) enqueueAction(ctx context.Context, key string, action actionType, airline flights.Airline, flight flights.Flight, airlineHash, flightHash common.Hash) error {
+	if flight.DepartureTimestamp <= 0 {
+		return fmt.Errorf("flight %s has invalid departure timestamp", flight.FlightID)
+	}
+	payload, err := buildMessagePayload(action, airlineHash, flightHash, uint64(flight.DepartureTimestamp))
+	if err != nil {
+		return err
+	}
+
+	epoch, requestID, err := n.requestSignature(ctx, payload)
+	if err != nil {
+		return fmt.Errorf("sign message: %w", err)
+	}
+
+	pending := &pendingAction{
+		Key:          key,
+		Airline:      airline,
+		Flight:       flight,
+		AirlineHash:  airlineHash,
+		FlightHash:   flightHash,
+		Type:         action,
+		Epoch:        epoch,
+		RequestID:    requestID,
+		TargetStatus: targetStatusFor(action),
+		CreatedAt:    time.Now(),
+	}
+	n.pending[key] = pending
+
+	slog.Info("scheduled flight action", "airline", airline.AirlineID, "flight", flight.FlightID, "action", string(action), "epoch", epoch)
+	return nil
+}
+
+func (n *flightNode) requestSignature(ctx context.Context, payload []byte) (uint64, string, error) {
+	epochInfos, err := n.relayClient.GetLastAllCommitted(ctx, &v1.GetLastAllCommittedRequest{})
+	if err != nil {
+		return 0, "", fmt.Errorf("last committed: %w", err)
+	}
+	var suggestedEpoch uint64
+	for _, info := range epochInfos.EpochInfos {
+		last := info.GetLastCommittedEpoch()
+		if suggestedEpoch == 0 || last < suggestedEpoch {
+			suggestedEpoch = last
+		}
+	}
+
+	resp, err := n.relayClient.SignMessage(ctx, &v1.SignMessageRequest{
+		KeyTag:        keyTag,
+		Message:       payload,
+		RequiredEpoch: &suggestedEpoch,
+	})
+	if err != nil {
+		return 0, "", err
+	}
+	return resp.Epoch, resp.RequestId, nil
+}
+
+func (n *flightNode) fetchProofs(ctx context.Context) error {
+	for _, action := range n.pending {
+		if action.Proof != nil {
+			continue
+		}
+		resp, err := n.relayClient.GetAggregationProof(ctx, &v1.GetAggregationProofRequest{RequestId: action.RequestID})
+		if err != nil {
+			continue
+		}
+		if resp.GetAggregationProof() == nil {
+			continue
+		}
+		action.Proof = resp.AggregationProof.Proof
+		slog.Info("aggregation proof ready", "airline", action.Airline.AirlineID, "flight", action.Flight.FlightID, "action", string(action.Type))
+	}
+	return nil
+}
+
+func (n *flightNode) submitReadyActions(ctx context.Context) error {
+	for key, action := range n.pending {
+		if action.Proof == nil || action.Submitted {
+			continue
+		}
+		if err := n.submitAction(ctx, action); err != nil {
+			slog.Warn("submit action failed", "airline", action.Airline.AirlineID, "flight", action.Flight.FlightID, "action", string(action.Type), "error", err)
+			continue
+		}
+		n.pending[key] = action
+	}
+	return nil
+}
+
+func (n *flightNode) submitAction(ctx context.Context, action *pendingAction) error {
+	txOpts, err := bind.NewKeyedTransactorWithChainID(n.privateKey, n.chainID)
+	if err != nil {
+		return err
+	}
+	txOpts.Context = ctx
+
+	epoch := big.NewInt(int64(action.Epoch))
+	var txHash common.Hash
+
+	switch action.Type {
+	case actionCreate:
+		scheduled := big.NewInt(action.Flight.DepartureTimestamp)
+		tx, err := n.contract.CreateFlight(txOpts, action.AirlineHash, action.FlightHash, scheduled, epoch, action.Proof)
+		if err != nil {
+			return err
+		}
+		txHash = tx.Hash()
+	case actionDelay:
+		tx, err := n.contract.DelayFlight(txOpts, action.AirlineHash, action.FlightHash, epoch, action.Proof)
+		if err != nil {
+			return err
+		}
+		txHash = tx.Hash()
+	case actionDepart:
+		tx, err := n.contract.DepartFlight(txOpts, action.AirlineHash, action.FlightHash, epoch, action.Proof)
+		if err != nil {
+			return err
+		}
+		txHash = tx.Hash()
+	default:
+		return fmt.Errorf("unknown action %s", action.Type)
+	}
+
+	action.Submitted = true
+	action.TxHash = txHash
+	slog.Info("submitted flight action", "airline", action.Airline.AirlineID, "flight", action.Flight.FlightID, "action", string(action.Type), "tx", txHash.Hex())
+	return nil
+}
+
+func (n *flightNode) clearSatisfiedPending(airlineHash, flightHash common.Hash, status flightStatus) {
+	for key, action := range n.pending {
+		if action.AirlineHash == airlineHash && action.FlightHash == flightHash && action.TargetStatus == status {
+			slog.Info("action confirmed on-chain", "airline", action.Airline.AirlineID, "flight", action.Flight.FlightID, "action", string(action.Type))
+			delete(n.pending, key)
+		}
+	}
+}
+
+func targetStatusFor(action actionType) flightStatus {
+	switch action {
+	case actionCreate:
+		return statusScheduled
+	case actionDelay:
+		return statusDelayed
+	case actionDepart:
+		return statusDeparted
+	default:
+		return statusNone
+	}
+}
+
+func buildMessagePayload(action actionType, airlineHash, flightHash common.Hash, departure uint64) ([]byte, error) {
+	var inner []byte
+	var err error
+	switch action {
+	case actionCreate:
+		if departure == 0 || departure > maxUint48 {
+			return nil, fmt.Errorf("invalid departure timestamp %d", departure)
+		}
+		inner, err = createInnerArgs.Pack(createTypehash, airlineHash, flightHash, big.NewInt(int64(departure)))
+	case actionDelay:
+		inner, err = statusInnerArgs.Pack(delayTypehash, airlineHash, flightHash)
+	case actionDepart:
+		inner, err = statusInnerArgs.Pack(departTypehash, airlineHash, flightHash)
+	default:
+		return nil, errors.New("unsupported action")
+	}
+	if err != nil {
+		return nil, err
+	}
+	digest := crypto.Keccak256Hash(inner)
+	return outerArgs.Pack(digest)
+}
+
+func hashIdentifier(id string) common.Hash {
+	normalized := strings.ToUpper(strings.TrimSpace(id))
+	return crypto.Keccak256Hash([]byte(normalized))
+}
+
+func actionKey(airlineHash, flightHash common.Hash, action actionType) string {
+	return fmt.Sprintf("%s|%s|%s", airlineHash.Hex(), flightHash.Hex(), action)
+}
+
+type flightsAPIClient struct {
+	baseURL    string
+	httpClient *http.Client
+}
+
+func newFlightsAPIClient(baseURL string) *flightsAPIClient {
+	return &flightsAPIClient{
+		baseURL:    strings.TrimSuffix(baseURL, "/"),
+		httpClient: &http.Client{Timeout: 5 * time.Second},
+	}
+}
+
+func (c *flightsAPIClient) ListAirlines(ctx context.Context) ([]flights.Airline, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/airlines", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("airlines request status %d", resp.StatusCode)
+	}
+	var body struct {
+		Airlines []flights.Airline `json:"airlines"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, err
+	}
+	return body.Airlines, nil
+}
+
+func (c *flightsAPIClient) ListFlights(ctx context.Context, airlineID string) ([]flights.Flight, error) {
+	endpoint := fmt.Sprintf("%s/airlines/%s/flights", c.baseURL, url.PathEscape(airlineID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("flights request status %d", resp.StatusCode)
+	}
+	var body struct {
+		Flights []flights.Flight `json:"flights"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, err
+	}
+	return body.Flights, nil
 }
