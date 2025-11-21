@@ -1,32 +1,31 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.25;
 
+import {BaseRewards} from "@symbioticfi/relay-contracts/src/modules/voting-power/extensions/BaseRewards.sol";
+import {BaseSlashing} from "@symbioticfi/relay-contracts/src/modules/voting-power/extensions/BaseSlashing.sol";
 import {
     EqualStakeVPCalc
 } from "@symbioticfi/relay-contracts/src/modules/voting-power/common/voting-power-calc/EqualStakeVPCalc.sol";
 import {
-    OpNetVaultAutoDeploy
-} from "@symbioticfi/relay-contracts/src/modules/voting-power/extensions/OpNetVaultAutoDeploy.sol";
-import {
-    IOpNetVaultAutoDeploy
-} from "@symbioticfi/relay-contracts/src/interfaces/modules/voting-power/extensions/IOpNetVaultAutoDeploy.sol";
-import {BaseRewards} from "@symbioticfi/relay-contracts/src/modules/voting-power/extensions/BaseRewards.sol";
-import {BaseSlashing} from "@symbioticfi/relay-contracts/src/modules/voting-power/extensions/BaseSlashing.sol";
+    IBaseRewards
+} from "@symbioticfi/relay-contracts/src/interfaces/modules/voting-power/extensions/IBaseRewards.sol";
 import {
     IBaseSlashing
 } from "@symbioticfi/relay-contracts/src/interfaces/modules/voting-power/extensions/IBaseSlashing.sol";
 import {
-    IBaseRewards
-} from "@symbioticfi/relay-contracts/src/interfaces/modules/voting-power/extensions/IBaseRewards.sol";
-import {OzOwnable} from "@symbioticfi/relay-contracts/src/modules/common/permissions/OzOwnable.sol";
+    IOpNetVaultAutoDeploy
+} from "@symbioticfi/relay-contracts/src/interfaces/modules/voting-power/extensions/IOpNetVaultAutoDeploy.sol";
 import {IOzOwnable} from "@symbioticfi/relay-contracts/src/interfaces/modules/common/permissions/IOzOwnable.sol";
+import {ISetMaxNetworkLimitHook} from "@symbioticfi/network/src/interfaces/ISetMaxNetworkLimitHook.sol";
+import {IVault} from "@symbioticfi/core/src/interfaces/vault/IVault.sol";
 import {
     IVotingPowerProvider
 } from "@symbioticfi/relay-contracts/src/interfaces/modules/voting-power/IVotingPowerProvider.sol";
+import {
+    OpNetVaultAutoDeploy
+} from "@symbioticfi/relay-contracts/src/modules/voting-power/extensions/OpNetVaultAutoDeploy.sol";
+import {OzOwnable} from "@symbioticfi/relay-contracts/src/modules/common/permissions/OzOwnable.sol";
 import {VotingPowerProvider} from "@symbioticfi/relay-contracts/src/modules/voting-power/VotingPowerProvider.sol";
-
-import {ISetMaxNetworkLimitHook} from "@symbioticfi/network/src/interfaces/ISetMaxNetworkLimitHook.sol";
-import {IVault} from "@symbioticfi/core/src/interfaces/vault/IVault.sol";
 
 contract VotingPowers is
     VotingPowerProvider,

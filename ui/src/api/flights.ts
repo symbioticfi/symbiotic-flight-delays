@@ -20,10 +20,10 @@ export async function fetchAirlinesWithFlights(baseUrl: string): Promise<Airline
   const results = await Promise.all(
     airlines.map(async (airline) => {
       const flightsResp = await getJSON<{ flights: FlightDTO[] }>(
-        `${normalized}/airlines/${encodeURIComponent(airline.airlineId)}/flights`
+        `${normalized}/airlines/${encodeURIComponent(airline.airlineId)}/flights`,
       );
       return { ...airline, flights: flightsResp.flights ?? [] };
-    })
+    }),
   );
   return results;
 }

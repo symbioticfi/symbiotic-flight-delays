@@ -2,7 +2,17 @@ import { Dispatch, SetStateAction, useCallback, useEffect, useMemo, useState } f
 import { NavLink, Route, Routes } from "react-router-dom";
 import { useAccount, usePublicClient, useWriteContract, useReadContracts } from "wagmi";
 import { useQuery } from "@tanstack/react-query";
-import { Address, Hex, BaseError, encodeAbiParameters, maxUint256, parseUnits, zeroAddress, createPublicClient, http } from "viem";
+import {
+  Address,
+  Hex,
+  BaseError,
+  encodeAbiParameters,
+  maxUint256,
+  parseUnits,
+  zeroAddress,
+  createPublicClient,
+  http,
+} from "viem";
 import type { Abi, PublicClient } from "viem";
 import { useAppKit } from "@reown/appkit/library/react";
 import { ToastContainer, toast } from "react-toastify";
@@ -67,11 +77,7 @@ function formatWriteError(error: unknown) {
   return "Check console for more details.";
 }
 
-type MaybeContractResult<T> =
-  | { status: "success"; result: T }
-  | { status: "failure"; error: Error }
-  | T
-  | undefined;
+type MaybeContractResult<T> = { status: "success"; result: T } | { status: "failure"; error: Error } | T | undefined;
 
 function unwrapResult<T>(entry: MaybeContractResult<T>): T | undefined {
   if (entry === undefined || entry === null) return undefined;

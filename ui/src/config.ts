@@ -48,5 +48,5 @@ export const chain = defineChain({
   id: chainId,
   name: chainName,
   nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
-  rpcUrls: { default: { http: [rpcUrl] }, public: { http: [rpcUrl] } }
+  rpcUrls: { default: { http: [rpcUrl] }, public: { http: [rpcUrl] } },
 });

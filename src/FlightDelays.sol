@@ -3,46 +3,41 @@ pragma solidity ^0.8.25;
 
 import {VotingPowers} from "./symbiotic/VotingPowers.sol";
 
-import {NetworkManager} from "@symbioticfi/relay-contracts/src/modules/base/NetworkManager.sol";
-
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-
-import {ISettlement} from "@symbioticfi/relay-contracts/src/interfaces/modules/settlement/ISettlement.sol";
 import {
-    IBaseSlashing
-} from "@symbioticfi/relay-contracts/src/interfaces/modules/voting-power/extensions/IBaseSlashing.sol";
+    TimelockControllerUpgradeable
+} from "@openzeppelin/contracts-upgradeable/governance/TimelockControllerUpgradeable.sol";
+
+import {IBaseDelegator} from "@symbioticfi/core/src/interfaces/delegator/IBaseDelegator.sol";
 import {
     IBaseRewards
 } from "@symbioticfi/relay-contracts/src/interfaces/modules/voting-power/extensions/IBaseRewards.sol";
-import {
-    IVotingPowerProvider
-} from "@symbioticfi/relay-contracts/src/interfaces/modules/voting-power/IVotingPowerProvider.sol";
-import {INetworkManager} from "@symbioticfi/relay-contracts/src/interfaces/modules/base/INetworkManager.sol";
-
-import {IVaultConfigurator} from "@symbioticfi/core/src/interfaces/IVaultConfigurator.sol";
-import {IVault} from "@symbioticfi/core/src/interfaces/vault/IVault.sol";
-import {IBaseDelegator} from "@symbioticfi/core/src/interfaces/delegator/IBaseDelegator.sol";
-import {
-    IOperatorNetworkSpecificDelegator
-} from "@symbioticfi/core/src/interfaces/delegator/IOperatorNetworkSpecificDelegator.sol";
 import {IBaseSlasher} from "@symbioticfi/core/src/interfaces/slasher/IBaseSlasher.sol";
-import {ISlasher} from "@symbioticfi/core/src/interfaces/slasher/ISlasher.sol";
-import {Subnetwork} from "@symbioticfi/core/src/contracts/libraries/Subnetwork.sol";
-import {IOperatorRegistry} from "@symbioticfi/core/src/interfaces/IOperatorRegistry.sol";
-import {IOptInService} from "@symbioticfi/core/src/interfaces/service/IOptInService.sol";
-
+import {
+    IBaseSlashing
+} from "@symbioticfi/relay-contracts/src/interfaces/modules/voting-power/extensions/IBaseSlashing.sol";
 import {
     IDefaultStakerRewardsFactory
 } from "@symbioticfi/rewards/src/interfaces/defaultStakerRewards/IDefaultStakerRewardsFactory.sol";
 import {
     IDefaultStakerRewards
 } from "@symbioticfi/rewards/src/interfaces/defaultStakerRewards/IDefaultStakerRewards.sol";
-
+import {INetworkManager} from "@symbioticfi/relay-contracts/src/interfaces/modules/base/INetworkManager.sol";
 import {
-    TimelockControllerUpgradeable
-} from "@openzeppelin/contracts-upgradeable/governance/TimelockControllerUpgradeable.sol";
-
+    IOperatorNetworkSpecificDelegator
+} from "@symbioticfi/core/src/interfaces/delegator/IOperatorNetworkSpecificDelegator.sol";
+import {IOperatorRegistry} from "@symbioticfi/core/src/interfaces/IOperatorRegistry.sol";
+import {IOptInService} from "@symbioticfi/core/src/interfaces/service/IOptInService.sol";
+import {ISettlement} from "@symbioticfi/relay-contracts/src/interfaces/modules/settlement/ISettlement.sol";
+import {ISlasher} from "@symbioticfi/core/src/interfaces/slasher/ISlasher.sol";
+import {IVaultConfigurator} from "@symbioticfi/core/src/interfaces/IVaultConfigurator.sol";
+import {IVault} from "@symbioticfi/core/src/interfaces/vault/IVault.sol";
+import {
+    IVotingPowerProvider
+} from "@symbioticfi/relay-contracts/src/interfaces/modules/voting-power/IVotingPowerProvider.sol";
+import {NetworkManager} from "@symbioticfi/relay-contracts/src/modules/base/NetworkManager.sol";
+import {Subnetwork} from "@symbioticfi/core/src/contracts/libraries/Subnetwork.sol";
 
 contract FlightDelays is NetworkManager {
     using SafeERC20 for IERC20;
@@ -123,7 +118,7 @@ contract FlightDelays is NetworkManager {
     address public immutable OPERATOR_VAULT_OPT_IN_SERVICE;
     address public immutable OPERATOR_NETWORK_OPT_IN_SERVICE;
     address public immutable OPERATOR_REGISTRY;
-    
+
     address public votingPowers;
     address public settlement;
     address public collateral;
@@ -174,7 +169,6 @@ contract FlightDelays is NetworkManager {
                 subnetworkId: INetworkManager(votingPowers).SUBNETWORK_IDENTIFIER()
             })
         );
-
 
         IOperatorRegistry(OPERATOR_REGISTRY).registerOperator();
         IOptInService(OPERATOR_NETWORK_OPT_IN_SERVICE).optIn(NETWORK());
