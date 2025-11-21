@@ -26,3 +26,23 @@ export interface FlightChainState {
 export interface PolicyState {
   status: number;
 }
+
+export interface ProtocolInfo {
+  policyPremium: bigint;
+  policyPayout: bigint;
+  policyWindow: bigint;
+  delayWindow: bigint;
+  collateral: `0x${string}`;
+  collateralSymbol: string;
+  collateralDecimals: number;
+  network: `0x${string}`;
+}
+
+export type ChainFlightData = Record<string, FlightChainState>;
+
+export type PolicyMap = Record<string, number>;
+
+export type FlattenedFlight = {
+  airline: AirlineWithFlights;
+  flight: FlightDTO;
+};

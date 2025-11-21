@@ -1,4 +1,4 @@
-import { Dispatch, SetStateAction, useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { NavLink, Route, Routes } from "react-router-dom";
 import { useAccount, usePublicClient, useWriteContract, useReadContracts } from "wagmi";
 import { useQuery } from "@tanstack/react-query";
@@ -22,39 +22,18 @@ import flightDelaysAbi from "./abi/FlightDelays.json";
 import erc20Abi from "./abi/ERC20.json";
 import vaultAbi from "./abi/Vault.json";
 import rewardsAbi from "./abi/Rewards.json";
+import { BuyerPage } from "./components/BuyerPage";
+import { ProviderPage } from "./components/ProviderPage";
 import { chain, flightsApiUrl, flightDelaysAddress, rpcUrl } from "./config";
 import { fetchAirlinesWithFlights } from "./api/flights";
-import type { AirlineWithFlights } from "./types";
+import type { AirlineWithFlights, ChainFlightData, FlattenedFlight, PolicyMap, ProtocolInfo } from "./types";
 import { flightKey, hashIdentifier } from "./utils/hash";
-import { formatAmount, formatTimestamp } from "./utils/format";
+import { formatAmount } from "./utils/format";
 
 const flightDelaysABI = flightDelaysAbi as Abi;
 const erc20ABI = erc20Abi as Abi;
 const vaultABI = vaultAbi as Abi;
 const rewardsABI = rewardsAbi as Abi;
-
-interface ProtocolInfo {
-  policyPremium: bigint;
-  policyPayout: bigint;
-  policyWindow: bigint;
-  delayWindow: bigint;
-  collateral: Address;
-  collateralSymbol: string;
-  collateralDecimals: number;
-  network: Address;
-}
-
-interface ChainFlightData {
-  [key: string]: {
-    timestamp: bigint;
-    status: number;
-    policiesSold: bigint;
-  };
-}
-
-interface PolicyMap {
-  [key: string]: number;
-}
 
 const defaultRewardsToClaim = 5n;
 
@@ -88,17 +67,6 @@ function unwrapResult<T>(entry: MaybeContractResult<T>): T | undefined {
   return entry as T;
 }
 
-const airlineImages: Record<string, string> = {
-  ALPHA: "/alpha-air.png",
-  BETA: "/beta-wings.png",
-  GAMMA: "/gamma-connect.png",
-};
-
-type FlattenedFlight = {
-  airline: AirlineWithFlights;
-  flight: AirlineWithFlights["flights"][number];
-};
-
 export default function App() {
   const { address, isConnected } = useAccount();
   const wagmiPublicClient = usePublicClient({ chainId: chain.id });
@@ -107,7 +75,7 @@ export default function App() {
   const { writeContract } = useWriteContract();
   const { open } = useAppKit();
 
-  const flightsQuery = useQuery({
+  const flightsQuery = useQuery<AirlineWithFlights[]>({
     queryKey: ["flights", flightsApiUrl],
     queryFn: () => fetchAirlinesWithFlights(flightsApiUrl),
     refetchInterval: 10_000,
@@ -159,14 +127,8 @@ export default function App() {
     return false;
   };
 
-  const flattenedFlights = useMemo(
-    () =>
-      flights.flatMap((airline) =>
-        airline.flights.map((flight) => ({
-          airline,
-          flight,
-        })),
-      ),
+  const flattenedFlights: FlattenedFlight[] = useMemo(
+    () => flights.flatMap((airline) => airline.flights.map((flight) => ({ airline, flight }))),
     [flights],
   );
 
@@ -258,7 +220,7 @@ export default function App() {
     },
   });
 
-  const chainFlights = useMemo(() => {
+  const chainFlights: ChainFlightData = useMemo(() => {
     const map: ChainFlightData = {};
     const data = flightReads.data;
     if (!data) return map;
@@ -291,7 +253,7 @@ export default function App() {
     },
   });
 
-  const policies = useMemo(() => {
+  const policies: PolicyMap = useMemo(() => {
     const map: PolicyMap = {};
     const data = policyReads.data;
     if (!data) return map;
@@ -819,371 +781,4 @@ function WalletStatus({
       <appkit-button />
     </div>
   );
-}
-
-function statusLabel(status: number) {
-  switch (status) {
-    case 1:
-      return "Scheduled";
-    case 2:
-      return "Delayed";
-    case 3:
-      return "Departed";
-    default:
-      return "Not created";
-  }
-}
-
-interface BuyerPageProps {
-  flightsLoading: boolean;
-  flattenedFlights: FlattenedFlight[];
-  chainFlights: ChainFlightData;
-  policies: PolicyMap;
-  protocol: ProtocolInfo | null;
-  isConnected: boolean;
-  allowanceEnough: boolean;
-  handleApprove: () => Promise<void>;
-  handleBuy: (airlineId: string, flightId: string) => Promise<void>;
-  handleClaim: (airlineId: string, flightId: string) => Promise<void>;
-  now: number;
-}
-
-function BuyerPage({
-  flightsLoading,
-  flattenedFlights,
-  chainFlights,
-  policies,
-  protocol,
-  isConnected,
-  allowanceEnough,
-  handleApprove,
-  handleBuy,
-  handleClaim,
-  now,
-}: BuyerPageProps) {
-  return (
-    <section className="panel">
-      <h2>Available Flights</h2>
-      {flightsLoading ? (
-        <p>Loading flights...</p>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Airline</th>
-              <th>Flight</th>
-              <th>Departure</th>
-              <th>API Status</th>
-              <th>On-chain</th>
-              <th>Policies</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {flattenedFlights.map(({ airline, flight }) => {
-              const key = flightKey(airline.airlineId, flight.flightId);
-              const chainData = chainFlights[key];
-              const policyStatus = policies[key] ?? 0;
-              const hasPolicy = policyStatus === 1 || policyStatus === 2;
-              const chainStatus = chainData?.status ?? (flight.departureTimestamp > now ? 1 : 0);
-              const onChainStatus = statusLabel(chainStatus);
-              const buyWindow = getBuyWindowInfo(chainData, protocol, now, flight.departureTimestamp);
-              const departureTs = chainData ? Number(chainData.timestamp ?? 0n) : flight.departureTimestamp;
-              const departureCountdown = Math.max(0, departureTs - now);
-              const canClaim = policyStatus === 1 && chainStatus === 2;
-              const buyDisabled = !isConnected || !allowanceEnough || buyWindow?.state !== "open" || hasPolicy;
-
-              let actionNode: React.ReactNode = null;
-              let timerLabel: string | null = null;
-              let timerClass = "after";
-
-              if (chainStatus === 2) {
-                if (policyStatus === 2) {
-                  actionNode = <button disabled>Claimed</button>;
-                } else if (policyStatus === 1) {
-                  actionNode = (
-                    <button onClick={() => handleClaim(airline.airlineId, flight.flightId)} disabled={!isConnected}>
-                      Claim
-                    </button>
-                  );
-                } else {
-                  actionNode = <>Delayed</>;
-                }
-                timerLabel = "Flight delayed";
-              } else if (chainStatus === 3) {
-                actionNode = <>Departed</>;
-              } else {
-                if (!protocol) {
-                  actionNode = <button disabled>Buy</button>;
-                  timerLabel = `Departs in ${formatCountdown(departureCountdown)}`;
-                } else if (buyWindow) {
-                  switch (buyWindow.state) {
-                    case "before":
-                      actionNode = <button disabled>Buy</button>;
-                      timerLabel = `Opens in ${formatCountdown(buyWindow.seconds)}`;
-                      timerClass = "before";
-                      break;
-                    case "open":
-                      if (hasPolicy) {
-                        actionNode = <button disabled>Purchased</button>;
-                        timerLabel = `Closes in ${formatCountdown(buyWindow.seconds)}`;
-                        timerClass = "open";
-                      } else {
-                        actionNode = (
-                          <button onClick={() => handleBuy(airline.airlineId, flight.flightId)} disabled={buyDisabled}>
-                            Buy
-                          </button>
-                        );
-                        timerLabel = `Closes in ${formatCountdown(buyWindow.seconds)}`;
-                        timerClass = "open";
-                      }
-                      break;
-                    case "after":
-                      actionNode = <button disabled>Buy</button>;
-                      timerLabel = `Departs in ${formatCountdown(buyWindow.seconds)}`;
-                      timerClass = "after";
-                      break;
-                  }
-                } else {
-                  actionNode = <button disabled>Buy</button>;
-                  timerLabel = `Departs in ${formatCountdown(departureCountdown)}`;
-                }
-              }
-              return (
-                <tr key={key}>
-                  <td>
-                    <div className="airline-cell">
-                      <img
-                        src={airlineImages[airline.airlineId.toUpperCase()] ?? "/logo.png"}
-                        alt={airline.name}
-                        className="airline-thumb"
-                      />
-                      <span>{airline.name}</span>
-                    </div>
-                  </td>
-                  <td>{flight.flightId}</td>
-                  <td>{formatTimestamp(flight.departureTimestamp)}</td>
-                  <td>{flight.status}</td>
-                  <td>{onChainStatus}</td>
-                  <td>{policyStatusLabel(policyStatus)}</td>
-                  <td className="actions">
-                    {actionNode}
-                    {timerLabel && <span className={`buy-window ${timerClass}`}>{timerLabel}</span>}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      )}
-      {isConnected && protocol && !allowanceEnough && (
-        <div className="notice">
-          <p>Approve the FlightDelays contract to spend your collateral before buying insurance.</p>
-          <button onClick={handleApprove}>Approve {protocol.collateralSymbol}</button>
-        </div>
-      )}
-    </section>
-  );
-}
-
-interface ProviderPageProps {
-  flights: AirlineWithFlights[];
-  isConnected: boolean;
-  protocol: ProtocolInfo | null;
-  airlinesOnChain: Map<string, { vault: Address; rewards: Address }>;
-  vaultAllowances: Map<string, bigint>;
-  vaultBalances: Map<string, bigint>;
-  rewardEstimates: Map<string, bigint>;
-  depositInputs: Record<string, string>;
-  withdrawInputs: Record<string, string>;
-  maxRewardsInputs: Record<string, string>;
-  setDepositInputs: Dispatch<SetStateAction<Record<string, string>>>;
-  setWithdrawInputs: Dispatch<SetStateAction<Record<string, string>>>;
-  setMaxRewardsInputs: Dispatch<SetStateAction<Record<string, string>>>;
-  handleDeposit: (airlineId: string) => Promise<void>;
-  handleWithdraw: (airlineId: string) => Promise<void>;
-  handleApproveVault: (airlineId: string) => Promise<void>;
-  handleClaimRewards: (airlineId: string) => Promise<void>;
-}
-
-function ProviderPage({
-  flights,
-  isConnected,
-  protocol,
-  airlinesOnChain,
-  vaultAllowances,
-  vaultBalances,
-  rewardEstimates,
-  depositInputs,
-  withdrawInputs,
-  maxRewardsInputs,
-  setDepositInputs,
-  setWithdrawInputs,
-  setMaxRewardsInputs,
-  handleDeposit,
-  handleWithdraw,
-  handleApproveVault,
-  handleClaimRewards,
-}: ProviderPageProps) {
-  return (
-    <section className="panel">
-      <h2>Provider Tools</h2>
-      {!isConnected ? (
-        <p>Connect your wallet to manage vault liquidity and rewards.</p>
-      ) : flights.length === 0 ? (
-        <p>No airlines loaded yet.</p>
-      ) : (
-        flights.map((airline) => {
-          const vaultInfo = airlinesOnChain.get(airline.airlineId);
-          const balance = vaultBalances.get(airline.airlineId) ?? 0n;
-          const claimable = rewardEstimates.get(airline.airlineId) ?? 0n;
-          const depositValue = depositInputs[airline.airlineId] ?? "";
-          const withdrawValue = withdrawInputs[airline.airlineId] ?? "";
-          const maxRewardsValue = maxRewardsInputs[airline.airlineId] ?? "";
-          const decimals = protocol?.collateralDecimals ?? 18;
-          const vaultAllowance = vaultAllowances.get(airline.airlineId) ?? 0n;
-          const desiredDeposit = (() => {
-            try {
-              return depositValue ? parseUnits(depositValue, decimals) : 0n;
-            } catch {
-              return 0n;
-            }
-          })();
-          const needsVaultApproval = desiredDeposit > 0n && vaultAllowance < desiredDeposit;
-          return (
-            <div key={airline.airlineId} className="airline-card">
-              <div className="airline-card__header">
-                <div className="airline-card__brand">
-                  <img
-                    src={airlineImages[airline.airlineId.toUpperCase()] ?? "/logo.png"}
-                    alt={airline.name}
-                    className="airline-thumb large"
-                  />
-                  <div>
-                    <h3>{airline.name}</h3>
-                    <p className="muted">Vault: {vaultInfo?.vault ?? "-"}</p>
-                    <p className="muted">Rewards: {vaultInfo?.rewards ?? "-"}</p>
-                  </div>
-                </div>
-                <div>
-                  <div>
-                    Staked: {protocol ? formatAmount(balance, protocol.collateralDecimals) : "0"}{" "}
-                    {protocol?.collateralSymbol}
-                  </div>
-                  <div>
-                    Claimable rewards: {protocol ? formatAmount(claimable, protocol.collateralDecimals) : "0"}{" "}
-                    {protocol?.collateralSymbol}
-                  </div>
-                </div>
-              </div>
-              <div className="airline-card__actions">
-                <div>
-                  <label>Deposit amount</label>
-                  <div className="form-row">
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={depositValue}
-                      onChange={(e) => setDepositInputs((prev) => ({ ...prev, [airline.airlineId]: e.target.value }))}
-                    />
-                    <button onClick={() => handleDeposit(airline.airlineId)} disabled={!depositValue}>
-                      Deposit
-                    </button>
-                  </div>
-                  {protocol && (
-                    <p className="muted small">
-                      Allowance: {formatAmount(vaultAllowance, decimals)} {protocol.collateralSymbol}
-                    </p>
-                  )}
-                  {needsVaultApproval && (
-                    <button className="ghost-btn" onClick={() => handleApproveVault(airline.airlineId)}>
-                      Approve vault spending
-                    </button>
-                  )}
-                </div>
-                <div>
-                  <label>Withdraw amount</label>
-                  <div className="form-row">
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={withdrawValue}
-                      onChange={(e) => setWithdrawInputs((prev) => ({ ...prev, [airline.airlineId]: e.target.value }))}
-                    />
-                    <button onClick={() => handleWithdraw(airline.airlineId)} disabled={!withdrawValue}>
-                      Withdraw
-                    </button>
-                  </div>
-                </div>
-                <div>
-                  <label>Rewards (max batches)</label>
-                  <div className="form-row">
-                    <input
-                      type="number"
-                      min="1"
-                      step="1"
-                      value={maxRewardsValue}
-                      onChange={(e) =>
-                        setMaxRewardsInputs((prev) => ({ ...prev, [airline.airlineId]: e.target.value }))
-                      }
-                    />
-                    <button onClick={() => handleClaimRewards(airline.airlineId)}>Claim Rewards</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          );
-        })
-      )}
-    </section>
-  );
-}
-
-function policyStatusLabel(status: number) {
-  switch (status) {
-    case 1:
-      return "Purchased";
-    case 2:
-      return "Claimed";
-    default:
-      return "None";
-  }
-}
-
-function getBuyWindowInfo(
-  chainData: { timestamp: bigint; status: number } | undefined,
-  protocol: ProtocolInfo | null,
-  now: number,
-  fallbackDeparture?: number,
-) {
-  if (!protocol) return null;
-  const status = chainData?.status ?? (fallbackDeparture ? 1 : 0);
-  if (status !== 1) return null;
-  const ts = chainData ? Number(chainData.timestamp ?? 0n) : fallbackDeparture ?? 0;
-  if (!ts) return null;
-  const openAt = ts - Number(protocol.policyWindow ?? 0n);
-  const closeAt = ts - Number(protocol.delayWindow ?? 0n);
-  if (closeAt <= openAt) return null;
-  if (now < openAt) {
-    return { state: "before" as const, seconds: openAt - now };
-  }
-  if (now >= openAt && now <= closeAt) {
-    return { state: "open" as const, seconds: closeAt - now };
-  }
-  if (now < ts) {
-    return { state: "after" as const, seconds: ts - now };
-  }
-  return { state: "after" as const, seconds: 0 };
-}
-
-function formatCountdown(seconds: number) {
-  const clamped = Math.max(0, Math.floor(seconds));
-  const minutes = Math.floor(clamped / 60);
-  const secs = clamped % 60;
-  if (minutes <= 0) {
-    return `${secs}s`;
-  }
-  return `${minutes}m ${secs.toString().padStart(2, "0")}s`;
 }

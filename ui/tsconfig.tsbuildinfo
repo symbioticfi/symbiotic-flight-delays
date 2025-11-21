@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/config.ts","./src/main.tsx","./src/types.ts","./src/wallet.tsx","./src/api/flights.ts","./src/utils/format.ts","./src/utils/hash.ts"],"version":"5.7.3"}
+{"root":["./src/app.tsx","./src/config.ts","./src/main.tsx","./src/types.ts","./src/wallet.tsx","./src/api/flights.ts","./src/components/buyerpage.tsx","./src/components/providerpage.tsx","./src/constants/airlines.ts","./src/utils/format.ts","./src/utils/hash.ts"],"version":"5.7.3"}

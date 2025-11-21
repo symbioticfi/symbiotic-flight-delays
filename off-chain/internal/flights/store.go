@@ -167,7 +167,7 @@ func isValidTransition(from, to Status) bool {
 	case StatusScheduled:
 		return to == StatusDelayed || to == StatusDeparted || to == StatusScheduled
 	case StatusDelayed:
-		return to == StatusDelayed
+		return to == StatusDelayed || to == StatusDeparted
 	case StatusDeparted:
 		return to == StatusDeparted
 	default:

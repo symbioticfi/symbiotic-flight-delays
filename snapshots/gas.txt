@@ -11,7 +11,7 @@ Ran 10 tests for test/FlightDelays.t.sol:FlightDelaysTest
 [PASS] testDelayFlightAndClaim() (gas: 1436930)
 [PASS] testDelayRequiresEarlierFlightsProcessed() (gas: 1276496)
 [PASS] testFlightsMustBeCreatedWithNonDecreasingTimestamp() (gas: 1042914)
-Suite result: ok. 10 passed; 0 failed; 0 skipped; finished in 1.16ms (2.45ms CPU time)
+Suite result: ok. 10 passed; 0 failed; 0 skipped; finished in 4.88ms (11.52ms CPU time)
 
 ╭-----------------------------------------------+-----------------+-------+--------+-------+---------╮
 | script/mocks/MockERC20.sol:MockERC20 Contract |                 |       |        |       |         |
@@ -184,4 +184,4 @@ Suite result: ok. 10 passed; 0 failed; 0 skipped; finished in 1.16ms (2.45ms CPU
 ╰------------------------------------------------------+-----------------+------+--------+------+---------╯
 
 
-Ran 1 test suite in 3.63ms (1.16ms CPU time): 10 tests passed, 0 failed, 0 skipped (10 total tests)
+Ran 1 test suite in 9.10ms (4.88ms CPU time): 10 tests passed, 0 failed, 0 skipped (10 total tests)
