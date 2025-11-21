@@ -4,10 +4,10 @@ pragma solidity ^0.8.25;
 import {Vm, VmSafe} from "forge-std/Vm.sol";
 
 import {VotingPowers} from "../src/symbiotic/VotingPowers.sol";
+import {FlightDelays} from "../src/FlightDelays.sol";
 import {KeyRegistry} from "../src/symbiotic/KeyRegistry.sol";
 import {Driver} from "../src/symbiotic/Driver.sol";
 import {Settlement} from "../src/symbiotic/Settlement.sol";
-import {SumTask} from "../src/SumTask.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {BN254G2} from "./utils/BN254G2.sol";
 
@@ -37,6 +37,12 @@ import {
     KEY_TYPE_BLS_BN254,
     KEY_TYPE_ECDSA_SECP256K1
 } from "@symbioticfi/relay-contracts/src/interfaces/modules/key-registry/IKeyRegistry.sol";
+import {
+    IBaseSlashing
+} from "@symbioticfi/relay-contracts/src/interfaces/modules/voting-power/extensions/IBaseSlashing.sol";
+import {
+    IBaseRewards
+} from "@symbioticfi/relay-contracts/src/interfaces/modules/voting-power/extensions/IBaseRewards.sol";
 import {IValSetDriver} from "@symbioticfi/relay-contracts/src/interfaces/modules/valset-driver/IValSetDriver.sol";
 import {IEpochManager} from "@symbioticfi/relay-contracts/src/interfaces/modules/valset-driver/IEpochManager.sol";
 import {ISettlement} from "@symbioticfi/relay-contracts/src/interfaces/modules/settlement/ISettlement.sol";
@@ -48,6 +54,7 @@ import {IVault} from "@symbioticfi/core/src/interfaces/vault/IVault.sol";
 import {INetworkMiddlewareService} from "@symbioticfi/core/src/interfaces/service/INetworkMiddlewareService.sol";
 import {Logs} from "@symbioticfi/core/script/utils/Logs.sol";
 import {SymbioticCoreConstants} from "@symbioticfi/core/test/integration/SymbioticCoreConstants.sol";
+import {SymbioticRewardsConstants} from "@symbioticfi/rewards/test/integration/SymbioticRewardsConstants.sol";
 
 contract MyRelayDeploy is RelayDeploy {
     using KeyTags for uint8;
@@ -78,11 +85,11 @@ contract MyRelayDeploy is RelayDeploy {
 
     // CREATE3 salts
     bytes11 public constant NETWORK_SALT = bytes11("Network");
-    bytes11 public constant SUM_TASK_SALT = bytes11("SumTask");
     bytes11 public constant KEY_REGISTRY_SALT = bytes11("KeyRegistry");
     bytes11 public constant VOTING_POWER_PROVIDER_SALT = bytes11("VPProvider");
     bytes11 public constant SETTLEMENT_SALT = bytes11("Settlement");
     bytes11 public constant VALSET_DRIVER_SALT = bytes11("VSDriver");
+    bytes11 public constant FLIGHT_DELAYS_SALT = bytes11("FlightDelay");
 
     constructor() RelayDeploy("./temp-network/my-relay-deploy.toml") {}
 
@@ -96,6 +103,36 @@ contract MyRelayDeploy is RelayDeploy {
             config.set("staking_token", address(new MockERC20("StakingToken", "STK")));
         }
         return config.get("staking_token").toAddress();
+    }
+
+    function getInsuranceToken() internal returns (address) {
+        if (config.get("insurance_token").data.length == 0) {
+            vm.broadcast();
+            config.set("insurance_token", address(new MockERC20("MockUSD Coin", "mUSDC")));
+        }
+        return config.get("insurance_token").toAddress();
+    }
+
+    function getDefaultStakerRewardsFactory() internal returns (address) {
+        try this.getDefaultStakerRewardsFactoryInternal() returns (address factory) {
+            return factory;
+        } catch {
+            if (config.get("default_staker_rewards_factory").data.length == 0) {
+                SymbioticCoreConstants.Core memory core = getCore();
+                vm.broadcast();
+                address implementation = deployCode(
+                    "node_modules/@symbioticfi/rewards/out/DefaultStakerRewards.sol/DefaultStakerRewards.json",
+                    abi.encode(address(core.vaultFactory), address(core.networkMiddlewareService))
+                );
+                vm.broadcast();
+                address factory = deployCode(
+                    "node_modules/@symbioticfi/rewards/out/DefaultStakerRewardsFactory.sol/DefaultStakerRewardsFactory.json",
+                    abi.encode(implementation)
+                );
+                config.set("default_staker_rewards_factory", factory);
+            }
+            return config.get("default_staker_rewards_factory").toAddress();
+        }
     }
 
     function getNetwork() internal returns (address) {
@@ -179,7 +216,9 @@ contract MyRelayDeploy is RelayDeploy {
                     }),
                     isSetMaxNetworkLimitHookEnabled: true
                 }),
-                IOzOwnable.OzOwnableInitParams({owner: getDeployerAddress()})
+                IOzOwnable.OzOwnableInitParams({owner: getDeployerAddress()}),
+                IBaseRewards.BaseRewardsInitParams({rewarder: getDeployerAddress()}),
+                IBaseSlashing.BaseSlashingInitParams({slasher: address(0)})
             )
         );
     }
@@ -306,12 +345,42 @@ contract MyRelayDeploy is RelayDeploy {
     }
 
     function runDeploySettlement() public override {
-        address settlement =
-            deploySettlement({proxyOwner: getDeployerAddress(), isDeployerGuarded: false, salt: SETTLEMENT_SALT});
-        vm.broadcast();
-        address sumTask =
-            deployCreate3(bytes32(SUM_TASK_SALT), abi.encodePacked(type(SumTask).creationCode, abi.encode(settlement)));
-        config.set("sum_task", sumTask);
+        deploySettlement({proxyOwner: getDeployerAddress(), isDeployerGuarded: false, salt: SETTLEMENT_SALT});
+
+        if (config.get("voting_power_provider").data.length != 0) {
+            address flightDelays = deployCreate3(
+                bytes32(FLIGHT_DELAYS_SALT),
+                abi.encodePacked(
+                    type(FlightDelays).creationCode,
+                    address(getCore().vaultConfigurator),
+                    address(getCore().operatorVaultOptInService),
+                    address(getCore().operatorNetworkOptInService),
+                    getDefaultStakerRewardsFactory(),
+                    address(getCore().operatorRegistry)
+                )
+            );
+
+            FlightDelays.InitParams memory initParams = FlightDelays.InitParams({
+                votingPowers: getVotingPowerProvider(),
+                settlement: getSettlement(),
+                collateral: getInsuranceToken(),
+                vaultEpochDuration: uint48(3 days),
+                messageExpiry: uint32(12_000),
+                policyWindow: uint48(3 days),
+                delayWindow: uint48(1 days),
+                policyPremium: 5 ether,
+                policyPayout: 50 ether
+            });
+
+            vm.startBroadcast(VotingPowers(getVotingPowerProvider()).owner());
+            FlightDelays(flightDelays).initialize(initParams);
+            VotingPowers(getVotingPowerProvider()).setSlasher(flightDelays);
+            VotingPowers(getVotingPowerProvider()).setRewarder(flightDelays);
+            VotingPowers(getVotingPowerProvider()).setFlightDelays(flightDelays);
+            vm.stopBroadcast();
+
+            config.set("flight_delays", flightDelays);
+        }
 
         fundOperators();
     }
@@ -430,5 +499,9 @@ contract MyRelayDeploy is RelayDeploy {
         }
 
         Logs.log(logMessage);
+    }
+
+    function getDefaultStakerRewardsFactoryInternal() public returns (address) {
+        return address(SymbioticRewardsConstants.defaultStakerRewardsFactory());
     }
 }
