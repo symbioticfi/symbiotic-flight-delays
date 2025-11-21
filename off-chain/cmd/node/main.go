@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -165,9 +166,9 @@ var (
 	bytes32Type     = mustABIType("bytes32")
 	uint48Type      = mustABIType("uint48")
 	outerArgs       = abi.Arguments{{Type: bytes32Type}}
-	createInnerArgs = abi.Arguments{{Type: bytes32Type}, {Type: bytes32Type}, {Type: bytes32Type}, {Type: uint48Type}}
+	createInnerArgs = abi.Arguments{{Type: bytes32Type}, {Type: bytes32Type}, {Type: bytes32Type}, {Type: uint48Type}, {Type: bytes32Type}}
 	statusInnerArgs = abi.Arguments{{Type: bytes32Type}, {Type: bytes32Type}, {Type: bytes32Type}}
-	createTypehash  = crypto.Keccak256Hash([]byte("Create(bytes32 airlineId,bytes32 flightId,uint48 departure)"))
+	createTypehash  = crypto.Keccak256Hash([]byte("Create(bytes32 airlineId,bytes32 flightId,uint48 departure,bytes32 previousFlightId)"))
 	delayTypehash   = crypto.Keccak256Hash([]byte("Delay(bytes32 airlineId,bytes32 flightId)"))
 	departTypehash  = crypto.Keccak256Hash([]byte("Depart(bytes32 airlineId,bytes32 flightId)"))
 )
@@ -189,26 +190,27 @@ const (
 	actionDelay  actionType = "DELAY"
 	actionDepart actionType = "DEPART"
 
-	statusNone     flightStatus = 0
+	statusNone      flightStatus = 0
 	statusScheduled flightStatus = 1
-	statusDelayed  flightStatus = 2
-	statusDeparted flightStatus = 3
+	statusDelayed   flightStatus = 2
+	statusDeparted  flightStatus = 3
 )
 
 type pendingAction struct {
-	Key          string
-	Airline      flights.Airline
-	Flight       flights.Flight
-	AirlineHash  common.Hash
-	FlightHash   common.Hash
-	Type         actionType
-	Epoch        uint64
-	RequestID    string
-	Proof        []byte
-	Submitted    bool
-	TargetStatus flightStatus
-	TxHash       common.Hash
-	CreatedAt    time.Time
+	Key                string
+	Airline            flights.Airline
+	Flight             flights.Flight
+	AirlineHash        common.Hash
+	FlightHash         common.Hash
+	PreviousFlightHash common.Hash
+	Type               actionType
+	Epoch              uint64
+	RequestID          string
+	Proof              []byte
+	Submitted          bool
+	TargetStatus       flightStatus
+	TxHash             common.Hash
+	CreatedAt          time.Time
 }
 
 type flightNode struct {
@@ -233,17 +235,38 @@ func (n *flightNode) syncFlights(ctx context.Context) error {
 			slog.Warn("list flights failed", "airline", airline.AirlineID, "error", err)
 			continue
 		}
-		for _, flight := range flightsForAirline {
-			if err := n.evaluateFlight(ctx, airline, flight); err != nil {
-				slog.Warn("evaluate flight failed", "airline", airline.AirlineID, "flight", flight.FlightID, "error", err)
+		sort.SliceStable(flightsForAirline, func(i, j int) bool {
+			if flightsForAirline[i].DepartureTimestamp == flightsForAirline[j].DepartureTimestamp {
+				return flightsForAirline[i].FlightID < flightsForAirline[j].FlightID
 			}
+			return flightsForAirline[i].DepartureTimestamp < flightsForAirline[j].DepartureTimestamp
+		})
+		if err := n.evaluateAirlineFlights(ctx, airline, flightsForAirline); err != nil {
+			slog.Warn("evaluate airline failed", "airline", airline.AirlineID, "error", err)
 		}
 	}
 	return nil
 }
 
-func (n *flightNode) evaluateFlight(ctx context.Context, airline flights.Airline, flight flights.Flight) error {
+func (n *flightNode) evaluateAirlineFlights(ctx context.Context, airline flights.Airline, flightsForAirline []flights.Flight) error {
 	airlineHash := hashIdentifier(airline.AirlineID)
+	prevMap := make(map[string]common.Hash, len(flightsForAirline))
+	var prev common.Hash
+	for _, flight := range flightsForAirline {
+		prevMap[flight.FlightID] = prev
+		prev = hashIdentifier(flight.FlightID)
+	}
+
+	for _, flight := range flightsForAirline {
+		prevHash := prevMap[flight.FlightID]
+		if err := n.evaluateFlight(ctx, airline, flight, airlineHash, prevHash); err != nil {
+			slog.Warn("evaluate flight failed", "airline", airline.AirlineID, "flight", flight.FlightID, "error", err)
+		}
+	}
+	return nil
+}
+
+func (n *flightNode) evaluateFlight(ctx context.Context, airline flights.Airline, flight flights.Flight, airlineHash common.Hash, previousFlightHash common.Hash) error {
 	flightHash := hashIdentifier(flight.FlightID)
 
 	info, err := n.contract.Flights(&bind.CallOpts{Context: ctx}, airlineHash, flightHash)
@@ -264,7 +287,10 @@ func (n *flightNode) evaluateFlight(ctx context.Context, airline flights.Airline
 		return nil
 	}
 
-	return n.enqueueAction(ctx, key, nextAction, airline, flight, airlineHash, flightHash)
+	if err := n.enqueueAction(ctx, key, nextAction, airline, flight, airlineHash, flightHash, previousFlightHash); err != nil {
+		return err
+	}
+	return nil
 }
 
 func determineAction(apiStatus flights.Status, onChain flightStatus) (actionType, bool) {
@@ -284,11 +310,11 @@ func determineAction(apiStatus flights.Status, onChain flightStatus) (actionType
 	return "", false
 }
 
-func (n *flightNode) enqueueAction(ctx context.Context, key string, action actionType, airline flights.Airline, flight flights.Flight, airlineHash, flightHash common.Hash) error {
-	if flight.DepartureTimestamp <= 0 {
+func (n *flightNode) enqueueAction(ctx context.Context, key string, action actionType, airline flights.Airline, flight flights.Flight, airlineHash, flightHash, previousFlightHash common.Hash) error {
+	if action == actionCreate && flight.DepartureTimestamp <= 0 {
 		return fmt.Errorf("flight %s has invalid departure timestamp", flight.FlightID)
 	}
-	payload, err := buildMessagePayload(action, airlineHash, flightHash, uint64(flight.DepartureTimestamp))
+	payload, err := buildMessagePayload(action, airlineHash, flightHash, previousFlightHash, uint64(flight.DepartureTimestamp))
 	if err != nil {
 		return err
 	}
@@ -299,16 +325,17 @@ func (n *flightNode) enqueueAction(ctx context.Context, key string, action actio
 	}
 
 	pending := &pendingAction{
-		Key:          key,
-		Airline:      airline,
-		Flight:       flight,
-		AirlineHash:  airlineHash,
-		FlightHash:   flightHash,
-		Type:         action,
-		Epoch:        epoch,
-		RequestID:    requestID,
-		TargetStatus: targetStatusFor(action),
-		CreatedAt:    time.Now(),
+		Key:                key,
+		Airline:            airline,
+		Flight:             flight,
+		AirlineHash:        airlineHash,
+		FlightHash:         flightHash,
+		PreviousFlightHash: previousFlightHash,
+		Type:               action,
+		Epoch:              epoch,
+		RequestID:          requestID,
+		TargetStatus:       targetStatusFor(action),
+		CreatedAt:          time.Now(),
 	}
 	n.pending[key] = pending
 
@@ -363,6 +390,16 @@ func (n *flightNode) submitReadyActions(ctx context.Context) error {
 		if action.Proof == nil || action.Submitted {
 			continue
 		}
+		if action.Type == actionCreate {
+			ready, err := n.canSubmitCreate(ctx, action)
+			if err != nil {
+				slog.Warn("check create readiness failed", "airline", action.Airline.AirlineID, "flight", action.Flight.FlightID, "error", err)
+				continue
+			}
+			if !ready {
+				continue
+			}
+		}
 		if err := n.submitAction(ctx, action); err != nil {
 			slog.Warn("submit action failed", "airline", action.Airline.AirlineID, "flight", action.Flight.FlightID, "action", string(action.Type), "error", err)
 			continue
@@ -385,7 +422,8 @@ func (n *flightNode) submitAction(ctx context.Context, action *pendingAction) er
 	switch action.Type {
 	case actionCreate:
 		scheduled := big.NewInt(action.Flight.DepartureTimestamp)
-		tx, err := n.contract.CreateFlight(txOpts, action.AirlineHash, action.FlightHash, scheduled, epoch, action.Proof)
+		prev := [32]byte(action.PreviousFlightHash)
+		tx, err := n.contract.CreateFlight(txOpts, action.AirlineHash, action.FlightHash, scheduled, prev, epoch, action.Proof)
 		if err != nil {
 			return err
 		}
@@ -412,6 +450,15 @@ func (n *flightNode) submitAction(ctx context.Context, action *pendingAction) er
 	return nil
 }
 
+func (n *flightNode) canSubmitCreate(ctx context.Context, action *pendingAction) (bool, error) {
+	airlineState, err := n.contract.Airlines(&bind.CallOpts{Context: ctx}, action.AirlineHash)
+	if err != nil {
+		return false, fmt.Errorf("read airline state: %w", err)
+	}
+	current := common.BytesToHash(airlineState.LastFlightId[:])
+	return current == action.PreviousFlightHash, nil
+}
+
 func (n *flightNode) clearSatisfiedPending(airlineHash, flightHash common.Hash, status flightStatus) {
 	for key, action := range n.pending {
 		if action.AirlineHash == airlineHash && action.FlightHash == flightHash && action.TargetStatus == status {
@@ -434,7 +481,7 @@ func targetStatusFor(action actionType) flightStatus {
 	}
 }
 
-func buildMessagePayload(action actionType, airlineHash, flightHash common.Hash, departure uint64) ([]byte, error) {
+func buildMessagePayload(action actionType, airlineHash, flightHash, previousFlightHash common.Hash, departure uint64) ([]byte, error) {
 	var inner []byte
 	var err error
 	switch action {
@@ -442,7 +489,7 @@ func buildMessagePayload(action actionType, airlineHash, flightHash common.Hash,
 		if departure == 0 || departure > maxUint48 {
 			return nil, fmt.Errorf("invalid departure timestamp %d", departure)
 		}
-		inner, err = createInnerArgs.Pack(createTypehash, airlineHash, flightHash, big.NewInt(int64(departure)))
+		inner, err = createInnerArgs.Pack(createTypehash, airlineHash, flightHash, big.NewInt(int64(departure)), previousFlightHash)
 	case actionDelay:
 		inner, err = statusInnerArgs.Pack(delayTypehash, airlineHash, flightHash)
 	case actionDepart:
@@ -453,8 +500,7 @@ func buildMessagePayload(action actionType, airlineHash, flightHash common.Hash,
 	if err != nil {
 		return nil, err
 	}
-	digest := crypto.Keccak256Hash(inner)
-	return outerArgs.Pack(digest)
+	return inner, nil
 }
 
 func hashIdentifier(id string) common.Hash {

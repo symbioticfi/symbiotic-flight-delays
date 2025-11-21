@@ -43,6 +43,7 @@ import {
     TimelockControllerUpgradeable
 } from "@openzeppelin/contracts-upgradeable/governance/TimelockControllerUpgradeable.sol";
 
+
 contract FlightDelays is NetworkManager {
     using SafeERC20 for IERC20;
     using Subnetwork for bytes32;
@@ -55,10 +56,12 @@ contract FlightDelays is NetworkManager {
     error PreviousFlightIncomplete();
     error InvalidFlight();
     error InvalidTimestamp();
+    error InvalidPreviousFlight();
     error InvalidMessageSignature();
     error InvalidEpoch();
     error PolicyAlreadyPurchased();
     error PolicyNotFound();
+    error SlashFailed();
     error InsufficientCoverage();
     error InvalidPolicy();
 
@@ -111,7 +114,7 @@ contract FlightDelays is NetworkManager {
     event InsuranceClaimed(bytes32 indexed airlineId, bytes32 indexed flightId, address indexed buyer, uint256 payout);
 
     bytes32 internal constant CREATE_MESSAGE_TYPEHASH =
-        keccak256("Create(bytes32 airlineId,bytes32 flightId,uint48 departure)");
+        keccak256("Create(bytes32 airlineId,bytes32 flightId,uint48 departure,bytes32 previousFlightId)");
     bytes32 internal constant DELAY_MESSAGE_TYPEHASH = keccak256("Delay(bytes32 airlineId,bytes32 flightId)");
     bytes32 internal constant DEPART_MESSAGE_TYPEHASH = keccak256("Depart(bytes32 airlineId,bytes32 flightId)");
 
@@ -119,7 +122,8 @@ contract FlightDelays is NetworkManager {
     address public immutable DEFAULT_STAKER_REWARDS_FACTORY;
     address public immutable OPERATOR_VAULT_OPT_IN_SERVICE;
     address public immutable OPERATOR_NETWORK_OPT_IN_SERVICE;
-
+    address public immutable OPERATOR_REGISTRY;
+    
     address public votingPowers;
     address public settlement;
     address public collateral;
@@ -146,8 +150,7 @@ contract FlightDelays is NetworkManager {
         OPERATOR_VAULT_OPT_IN_SERVICE = operatorVaultOptInService;
         OPERATOR_NETWORK_OPT_IN_SERVICE = operatorNetworkOptInService;
         DEFAULT_STAKER_REWARDS_FACTORY = defaultStakerRewardsFactory;
-
-        IOperatorRegistry(operatorRegistry).registerOperator();
+        OPERATOR_REGISTRY = operatorRegistry;
     }
 
     function initialize(InitParams calldata initParams) external initializer {
@@ -172,6 +175,8 @@ contract FlightDelays is NetworkManager {
             })
         );
 
+
+        IOperatorRegistry(OPERATOR_REGISTRY).registerOperator();
         IOptInService(OPERATOR_NETWORK_OPT_IN_SERVICE).optIn(NETWORK());
     }
 
@@ -179,6 +184,7 @@ contract FlightDelays is NetworkManager {
         bytes32 airlineId,
         bytes32 flightId,
         uint48 scheduledTimestamp,
+        bytes32 previousFlightId,
         uint48 epoch,
         bytes calldata proof
     ) external {
@@ -186,7 +192,11 @@ contract FlightDelays is NetworkManager {
             revert InvalidFlight();
         }
         _verifyFlightMessage(
-            abi.encode(keccak256(abi.encode(CREATE_MESSAGE_TYPEHASH, airlineId, flightId, scheduledTimestamp))),
+            abi.encode(
+                keccak256(
+                    abi.encode(CREATE_MESSAGE_TYPEHASH, airlineId, flightId, scheduledTimestamp, previousFlightId)
+                )
+            ),
             epoch,
             proof
         );
@@ -195,13 +205,15 @@ contract FlightDelays is NetworkManager {
         if (airline.vault == address(0)) {
             _deployAirline(airlineId);
         }
+        if (previousFlightId != airline.lastFlightId) {
+            revert InvalidPreviousFlight();
+        }
 
         Flight storage flight = flights[airlineId][flightId];
         if (flight.status != FlightStatus.NONE) {
             revert FlightAlreadyExists();
         }
 
-        bytes32 previousFlightId = airline.lastFlightId;
         if (previousFlightId != bytes32(0) && scheduledTimestamp < flights[airlineId][previousFlightId].timestamp) {
             revert InvalidTimestamp();
         }
@@ -240,8 +252,11 @@ contract FlightDelays is NetworkManager {
 
         uint256 coverage = flight.policiesSold * policyPayout;
         if (coverage > 0) {
-            IBaseSlashing(votingPowers)
+            (bool success, bytes memory response) = IBaseSlashing(votingPowers)
                 .slashVault(flight.timestamp - policyWindow, airline.vault, address(this), coverage, new bytes(0));
+            if (!success) {
+                revert SlashFailed();
+            }
         }
 
         emit FlightDelayed(airlineId, flightId);

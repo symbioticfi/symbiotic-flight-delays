@@ -1,0 +1,16 @@
+[
+  {
+    "type": "function",
+    "name": "slashableStake",
+    "stateMutability": "view",
+    "inputs": [
+      { "name": "network", "type": "bytes32" },
+      { "name": "operator", "type": "address" },
+      { "name": "captureTimestamp", "type": "uint48" },
+      { "name": "hints", "type": "bytes" }
+    ],
+    "outputs": [
+      { "name": "", "type": "uint256" }
+    ]
+  }
+]

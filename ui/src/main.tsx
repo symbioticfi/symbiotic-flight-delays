@@ -1,27 +1,16 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { WagmiProvider, createConfig, http } from "wagmi";
-import { injected } from "wagmi/connectors";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import "./styles.css";
-import { chain, rpcUrl } from "./config";
-
-const config = createConfig({
-  chains: [chain],
-  transports: { [chain.id]: http(rpcUrl) },
-  connectors: [injected({ target: "metaMask" })],
-  ssr: false
-});
-
-const queryClient = new QueryClient();
+import { AppProviders } from "./wallet";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <WagmiProvider config={config}>
-      <QueryClientProvider client={queryClient}>
+    <BrowserRouter>
+      <AppProviders>
         <App />
-      </QueryClientProvider>
-    </WagmiProvider>
+      </AppProviders>
+    </BrowserRouter>
   </React.StrictMode>
 );

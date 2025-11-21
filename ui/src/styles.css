@@ -44,6 +44,20 @@ button {
   gap: 24px;
 }
 
+.app-title {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.app-logo {
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+  object-fit: cover;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+}
+
 .app-header h1 {
   margin: 0 0 8px;
 }
@@ -51,6 +65,26 @@ button {
 .app-header p {
   margin: 0;
   color: #b3bdcc;
+}
+
+.main-nav {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.main-nav a {
+  text-decoration: none;
+  color: #b3bdcc;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.main-nav a.active {
+  color: #0b0c10;
+  background: #ffd666;
+  border-color: #ffd666;
 }
 
 .panel {
@@ -76,6 +110,25 @@ td {
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.airline-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.airline-thumb {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  object-fit: cover;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.airline-thumb.large {
+  width: 64px;
+  height: 64px;
+}
+
 .actions button {
   padding: 6px 16px;
   border-radius: 8px;
@@ -89,10 +142,51 @@ td {
   cursor: not-allowed;
 }
 
+.buy-window {
+  display: block;
+  font-size: 0.78rem;
+  margin-top: 4px;
+  color: #b3bdcc;
+}
+
+.buy-window.open {
+  color: #ffd666;
+}
+
+.buy-window.before {
+  color: #8bc1ff;
+}
+
+.buy-window.after {
+  color: #ff8f8f;
+}
+
 .wallet-status {
   display: flex;
   gap: 12px;
   align-items: center;
+}
+
+.balance-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  min-width: 170px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.balance-chip__label {
+  font-size: 0.75rem;
+  color: #b3bdcc;
+  letter-spacing: 0.01em;
+}
+
+.balance-chip__value {
+  font-weight: 600;
+  color: #f4f7ff;
 }
 
 .wallet-status button {
@@ -148,6 +242,12 @@ td {
   display: flex;
   justify-content: space-between;
   gap: 16px;
+}
+
+.airline-card__brand {
+  display: flex;
+  gap: 12px;
+  align-items: center;
 }
 
 .airline-card__actions {

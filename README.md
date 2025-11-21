@@ -26,17 +26,17 @@ The original super-sum example has been entirely replaced by this flight-delay f
 ## Prerequisites
 
 - Node.js 18+
-- npm (used both at repo root and inside `ui/`)
+- pnpm
 - Go 1.21+
 - Foundry (`forge`)
-- Docker (only if you plan to run the full Symbiotic devnet via `generate_network.sh`)
+- Docker
 
 ## Installation
 
 ```bash
-npm install
+pnpm install
 cd off-chain && go mod tidy
-cd ../ui && npm install
+cd ../ui && pnpm install
 cd ..
 ```
 
@@ -70,31 +70,43 @@ Stop and clean everything with:
 
 ```bash
 docker compose --project-directory temp-network down -v
+rm -rf temp-network
 ```
 
-## Optional UI
+## Ports
 
-Run the React/wagmi UI locally (outside docker) for a wallet-connected view:
+| Service        | Default Port | Notes                                                                         |
+| -------------- | ------------ | ----------------------------------------------------------------------------- |
+| UI (Vite dev)  | 5173         | `pnpm --filter ui dev`; `pnpm preview` serves on 4173 by default.             |
+| Flights API    | 8085         | Mock airline/flight data plus POST endpoints for create/delay/depart actions. |
+| Off-chain node | 8080         | Relay-sidecar instances listen on 8080 inside the compose network.            |
+| Anvil (L1/L2)  | 8545         | JSON-RPC endpoint used by contracts, oracle node, and the UI.                 |
 
-```bash
-cd ui
-cp .env.example .env   # adjust RPC URL / addresses if needed
-npm run dev
-```
+## API Endpoints
+
+All endpoints below are served by the mock Flights API (`http://localhost:8085` unless overridden):
+
+- `GET /healthz` – readiness probe.
+- `GET /airlines` – lists all airlines and their current metadata.
+- `POST /airlines` – create an airline (`{ "airlineId": "...", "name": "...", "code": "ALP" }`).
+- `GET /airlines/{airlineId}/flights` – list flights for an airline.
+- `POST /airlines/{airlineId}/flights` – create/schedule a new flight (`flightId`, `departureTimestamp`).
+- `POST /airlines/{airlineId}/flights/{flightId}/delay` – mark a flight as delayed.
+- `POST /airlines/{airlineId}/flights/{flightId}/depart` – mark a flight as departed.
+
+## UI
 
 The UI surfaces a compact list of flights plus basic provider controls (approve collateral, buy coverage, claim after delays, inspect vault balances, deposit/withdraw, claim rewards).
 
-## Configuration notes
+Available at `http://localhost:5173`
 
-- `ui/.env.example` documents the environment variables (RPC URL, chain metadata, contract address, flights API URL).
-- The flights API keeps everything in memory—restart the docker service if you want a clean slate.
+## Local Deployments
 
-## Testing
+http://anvil:8545:
 
-Use the following commands to verify changes:
-
-```bash
-forge test                           # Solidity unit tests for FlightDelays
-cd off-chain && go test ./...        # flights API + node packages
-cd ui && npm run build               # type-check + build the frontend
-```
+- `ValSetDriver`: 0x43C27243F96591892976FFf886511807B65a33d5
+- `FlightDelays`: 0xA4b0f5eb09891c1538494c4989Eea0203b1153b1
+- `VotingPowerProvider`: 0x369c72C823A4Fc8d2A3A5C3B15082fb34A342878
+- `KeyRegistry`: 0xe1557A820E1f50dC962c3392b875Fe0449eb184F
+- `Settlement`: 0x882B9439598239d9626164f7578F812Ef324F5Cb
+- `Network`: 0xfdc4b2cA12dD7b1463CC01D8022a49BDcf5cFa24

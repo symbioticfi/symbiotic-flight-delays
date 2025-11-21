@@ -10,6 +10,7 @@ import {Driver} from "../src/symbiotic/Driver.sol";
 import {Settlement} from "../src/symbiotic/Settlement.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {BN254G2} from "./utils/BN254G2.sol";
+import {SymbioticRewardsConstantsHelper} from "./mocks/SymbioticRewardsConstantsHelper.sol";
 
 import {RelayDeploy} from "@symbioticfi/relay-contracts/script/RelayDeploy.sol";
 
@@ -54,7 +55,6 @@ import {IVault} from "@symbioticfi/core/src/interfaces/vault/IVault.sol";
 import {INetworkMiddlewareService} from "@symbioticfi/core/src/interfaces/service/INetworkMiddlewareService.sol";
 import {Logs} from "@symbioticfi/core/script/utils/Logs.sol";
 import {SymbioticCoreConstants} from "@symbioticfi/core/test/integration/SymbioticCoreConstants.sol";
-import {SymbioticRewardsConstants} from "@symbioticfi/rewards/test/integration/SymbioticRewardsConstants.sol";
 
 contract MyRelayDeploy is RelayDeploy {
     using KeyTags for uint8;
@@ -97,7 +97,7 @@ contract MyRelayDeploy is RelayDeploy {
         (,, deployer) = vm.readCallers();
     }
 
-    function getStakingToken() internal returns (address) {
+    function getStakingToken() internal withoutBroadcast returns (address) {
         if (config.get("staking_token").data.length == 0) {
             vm.broadcast();
             config.set("staking_token", address(new MockERC20("StakingToken", "STK")));
@@ -105,7 +105,7 @@ contract MyRelayDeploy is RelayDeploy {
         return config.get("staking_token").toAddress();
     }
 
-    function getInsuranceToken() internal returns (address) {
+    function getInsuranceToken() internal withoutBroadcast returns (address) {
         if (config.get("insurance_token").data.length == 0) {
             vm.broadcast();
             config.set("insurance_token", address(new MockERC20("MockUSD Coin", "mUSDC")));
@@ -113,8 +113,9 @@ contract MyRelayDeploy is RelayDeploy {
         return config.get("insurance_token").toAddress();
     }
 
-    function getDefaultStakerRewardsFactory() internal returns (address) {
-        try this.getDefaultStakerRewardsFactoryInternal() returns (address factory) {
+    function getDefaultStakerRewardsFactory() internal withoutBroadcast returns (address) {
+        SymbioticRewardsConstantsHelper helper = new SymbioticRewardsConstantsHelper();
+        try helper.defaultStakerRewardsFactory() returns (address factory) {
             return factory;
         } catch {
             if (config.get("default_staker_rewards_factory").data.length == 0) {
@@ -135,7 +136,7 @@ contract MyRelayDeploy is RelayDeploy {
         }
     }
 
-    function getNetwork() internal returns (address) {
+    function getNetwork() internal withoutBroadcast returns (address) {
         if (config.get("network").data.length == 0) {
             address[] memory proposersAndExecutors = new address[](1);
             proposersAndExecutors[0] = getDeployerAddress();
@@ -201,7 +202,7 @@ contract MyRelayDeploy is RelayDeploy {
                         network: getNetwork(), subnetworkId: 0
                     }),
                     ozEip712InitParams: IOzEIP712.OzEIP712InitParams({name: "VotingPowers", version: "1"}),
-                    requireSlasher: false,
+                    requireSlasher: true,
                     minVaultEpochDuration: SLASHING_WINDOW,
                     token: getStakingToken()
                 }),
@@ -348,39 +349,42 @@ contract MyRelayDeploy is RelayDeploy {
         deploySettlement({proxyOwner: getDeployerAddress(), isDeployerGuarded: false, salt: SETTLEMENT_SALT});
 
         if (config.get("voting_power_provider").data.length != 0) {
-            address flightDelays = deployCreate3(
-                bytes32(FLIGHT_DELAYS_SALT),
-                abi.encodePacked(
-                    type(FlightDelays).creationCode,
-                    address(getCore().vaultConfigurator),
-                    address(getCore().operatorVaultOptInService),
-                    address(getCore().operatorNetworkOptInService),
-                    getDefaultStakerRewardsFactory(),
-                    address(getCore().operatorRegistry)
-                )
-            );
-
             FlightDelays.InitParams memory initParams = FlightDelays.InitParams({
                 votingPowers: getVotingPowerProvider(),
                 settlement: getSettlement(),
                 collateral: getInsuranceToken(),
                 vaultEpochDuration: uint48(3 days),
                 messageExpiry: uint32(12_000),
-                policyWindow: uint48(3 days),
-                delayWindow: uint48(1 days),
+                policyWindow: uint48(2 minutes),
+                delayWindow: uint48(30 seconds),
                 policyPremium: 5 ether,
                 policyPayout: 50 ether
             });
 
+            vm.startBroadcast();
+            address flightDelays = deployCreate3AndInit(
+                bytes32(FLIGHT_DELAYS_SALT),
+                abi.encodePacked(
+                    type(FlightDelays).creationCode,
+                    abi.encode(
+                        address(getCore().vaultConfigurator),
+                        address(getCore().operatorVaultOptInService),
+                        address(getCore().operatorNetworkOptInService),
+                        getDefaultStakerRewardsFactory(),
+                        address(getCore().operatorRegistry)
+                    )
+                ),
+                abi.encodeCall(FlightDelays.initialize, (initParams))
+            );
+            vm.stopBroadcast();
+
             vm.startBroadcast(VotingPowers(getVotingPowerProvider()).owner());
-            FlightDelays(flightDelays).initialize(initParams);
             VotingPowers(getVotingPowerProvider()).setSlasher(flightDelays);
             VotingPowers(getVotingPowerProvider()).setRewarder(flightDelays);
             VotingPowers(getVotingPowerProvider()).setFlightDelays(flightDelays);
             vm.stopBroadcast();
 
             config.set("flight_delays", flightDelays);
-            vm.writeFile("temp-network/deploy-data/flight-delays.address", vm.toString(flightDelays));
         }
 
         fundOperators();
@@ -500,9 +504,5 @@ contract MyRelayDeploy is RelayDeploy {
         }
 
         Logs.log(logMessage);
-    }
-
-    function getDefaultStakerRewardsFactoryInternal() public returns (address) {
-        return address(SymbioticRewardsConstants.defaultStakerRewardsFactory());
     }
 }

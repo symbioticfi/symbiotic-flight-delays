@@ -1,20 +1,4 @@
 #!/bin/sh
-set -euo pipefail
+FLIGHT_DELAYS_ADDRESS=0xA4b0f5eb09891c1538494c4989Eea0203b1153b1
 
-RELAY_ENDPOINT=${1:-relay-sidecar-1:8080}
-NODE_PRIVATE_KEY=${2:?"missing node private key"}
-EVM_RPC_URL=${EVM_RPC_URL:-http://anvil:8545}
-FLIGHTS_API_URL=${FLIGHTS_API_URL:-http://flights-api:8085}
-FLIGHT_DELAYS_FILE=/deploy-data/flight-delays.address
-
-echo "Waiting for FlightDelays deployment info..."
-until [ -s "$FLIGHT_DELAYS_FILE" ]; do sleep 2; done
-FLIGHT_DELAYS_ADDRESS=$(cat "$FLIGHT_DELAYS_FILE")
-
-exec /app/flight-node \
-  --relay-api-url "http://$RELAY_ENDPOINT" \
-  --evm-rpc-url "$EVM_RPC_URL" \
-  --flight-delays-address "$FLIGHT_DELAYS_ADDRESS" \
-  --flights-api-url "$FLIGHTS_API_URL" \
-  --private-key "$NODE_PRIVATE_KEY" \
-  --log-level info
+exec /app/flight-node --relay-api-url "$1" --evm-rpc-url http://anvil:8545 --flight-delays-address "$FLIGHT_DELAYS_ADDRESS" --flights-api-url http://flights-api:8085 --private-key "$2" --log-level info

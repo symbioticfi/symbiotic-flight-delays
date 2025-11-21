@@ -4,10 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -34,6 +39,8 @@ var rootCmd = &cobra.Command{
 		defer cancel()
 
 		store := flights.NewStore(seedAirlines(), seedFlights())
+		generator := newFlightGenerator(store)
+		generator.start(ctx)
 		srv := newFlightServer(store)
 
 		httpServer := &http.Server{
@@ -89,6 +96,7 @@ func (s *flightServer) routes() http.Handler {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(corsMiddleware)
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	r.Get("/airlines", s.handleListAirlines)
 	r.Post("/airlines", s.handleCreateAirline)
@@ -224,9 +232,176 @@ func seedFlights() []flights.Flight {
 	now := time.Now().Unix()
 	toSeconds := func(d time.Duration) int64 { return int64(d.Seconds()) }
 	return []flights.Flight{
-		{AirlineID: "ALPHA", FlightID: "ALPHA-001", DepartureTimestamp: now + toSeconds(2*time.Hour), Status: flights.StatusScheduled},
-		{AirlineID: "ALPHA", FlightID: "ALPHA-002", DepartureTimestamp: now + toSeconds(4*time.Hour), Status: flights.StatusScheduled},
-		{AirlineID: "BETA", FlightID: "BETA-451", DepartureTimestamp: now + toSeconds(3*time.Hour), Status: flights.StatusScheduled},
-		{AirlineID: "GAMMA", FlightID: "GAMMA-882", DepartureTimestamp: now + toSeconds(5*time.Hour), Status: flights.StatusScheduled},
+		{AirlineID: "ALPHA", FlightID: "ALPHA-001", DepartureTimestamp: now + toSeconds(1*time.Minute), Status: flights.StatusScheduled},
+		{AirlineID: "ALPHA", FlightID: "ALPHA-002", DepartureTimestamp: now + toSeconds(3*time.Minute), Status: flights.StatusScheduled},
+		{AirlineID: "BETA", FlightID: "BETA-451", DepartureTimestamp: now + toSeconds(2*time.Minute), Status: flights.StatusScheduled},
+		{AirlineID: "GAMMA", FlightID: "GAMMA-882", DepartureTimestamp: now + toSeconds(4*time.Minute), Status: flights.StatusScheduled},
 	}
+}
+
+type flightGenerator struct {
+	store          *flights.Store
+	rand           *rand.Rand
+	counters       map[string]int
+	createInterval time.Duration
+	updateInterval time.Duration
+	mu             sync.Mutex
+}
+
+func newFlightGenerator(store *flights.Store) *flightGenerator {
+	gen := &flightGenerator{
+		store:          store,
+		rand:           rand.New(rand.NewSource(time.Now().UnixNano())),
+		counters:       make(map[string]int),
+		createInterval: 45 * time.Second,
+		updateInterval: 15 * time.Second,
+	}
+	gen.bootstrapCounters()
+	return gen
+}
+
+func (g *flightGenerator) start(ctx context.Context) {
+	createTicker := time.NewTicker(g.createInterval)
+	updateTicker := time.NewTicker(g.updateInterval)
+	go func() {
+		defer createTicker.Stop()
+		defer updateTicker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-createTicker.C:
+				g.maybeCreateFlights()
+			case <-updateTicker.C:
+				g.advanceFlights()
+			}
+		}
+	}()
+}
+
+func (g *flightGenerator) bootstrapCounters() {
+	airlines := g.store.ListAirlines()
+	for _, airline := range airlines {
+		flightsList, err := g.store.ListFlights(airline.AirlineID)
+		if err != nil {
+			continue
+		}
+		maxNum := 0
+		for _, f := range flightsList {
+			if n := parseFlightNumber(f.FlightID); n > maxNum {
+				maxNum = n
+			}
+		}
+		g.counters[airline.AirlineID] = maxNum
+	}
+}
+
+func (g *flightGenerator) maybeCreateFlights() {
+	airlines := g.store.ListAirlines()
+	now := time.Now().Unix()
+	for _, airline := range airlines {
+		flightsList, err := g.store.ListFlights(airline.AirlineID)
+		if err != nil {
+			continue
+		}
+		scheduled := 0
+		for _, f := range flightsList {
+			if f.Status == flights.StatusScheduled && f.DepartureTimestamp > now {
+				scheduled++
+			}
+		}
+		if scheduled >= 3 {
+			continue
+		}
+		flightID := g.nextFlightID(airline.AirlineID)
+		minutesAhead := time.Duration(g.rand.Intn(4)+1) * time.Minute
+		departure := now + int64(minutesAhead.Seconds())
+		latest := now
+		for _, f := range flightsList {
+			if f.DepartureTimestamp > latest {
+				latest = f.DepartureTimestamp
+			}
+		}
+		minGap := int64((1 * time.Minute).Seconds())
+		if latest >= departure {
+			departure = latest + minGap
+		}
+		_, err = g.store.CreateFlight(airline.AirlineID, flights.Flight{
+			AirlineID:          airline.AirlineID,
+			FlightID:           flightID,
+			DepartureTimestamp: departure,
+			Status:             flights.StatusScheduled,
+		})
+		if err != nil {
+			continue
+		}
+		slog.Info("auto-created flight", "airline", airline.AirlineID, "flight", flightID, "departure", departure)
+	}
+}
+
+func (g *flightGenerator) advanceFlights() {
+	airlines := g.store.ListAirlines()
+	now := time.Now().Unix()
+	for _, airline := range airlines {
+		flightsList, err := g.store.ListFlights(airline.AirlineID)
+		if err != nil {
+			continue
+		}
+		for _, f := range flightsList {
+			switch f.Status {
+			case flights.StatusScheduled:
+				if now < f.DepartureTimestamp {
+					continue
+				}
+				if g.rand.Float64() < 0.4 {
+					g.updateStatus(airline.AirlineID, f.FlightID, flights.StatusDelayed)
+				} else {
+					g.updateStatus(airline.AirlineID, f.FlightID, flights.StatusDeparted)
+				}
+			case flights.StatusDelayed:
+				if now >= f.DepartureTimestamp+int64((1*time.Minute).Seconds()) {
+					g.updateStatus(airline.AirlineID, f.FlightID, flights.StatusDeparted)
+				}
+			}
+		}
+	}
+}
+
+func (g *flightGenerator) updateStatus(airlineID, flightID string, status flights.Status) {
+	if _, err := g.store.UpdateStatus(airlineID, flightID, status); err == nil {
+		slog.Info("auto-updated flight", "airline", airlineID, "flight", flightID, "status", status)
+	}
+}
+
+func (g *flightGenerator) nextFlightID(airlineID string) string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	n := g.counters[airlineID] + 1
+	g.counters[airlineID] = n
+	return fmt.Sprintf("%s-%03d", strings.ToUpper(airlineID), n)
+}
+
+func parseFlightNumber(id string) int {
+	idx := strings.LastIndex(id, "-")
+	if idx == -1 || idx == len(id)-1 {
+		return 0
+	}
+	n, err := strconv.Atoi(id[idx+1:])
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

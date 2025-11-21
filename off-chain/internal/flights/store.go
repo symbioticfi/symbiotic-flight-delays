@@ -77,7 +77,12 @@ func (s *Store) ListFlights(airlineID string) ([]Flight, error) {
 	for _, flight := range flightMap {
 		items = append(items, *flight)
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].DepartureTimestamp < items[j].DepartureTimestamp })
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].DepartureTimestamp == items[j].DepartureTimestamp {
+			return items[i].FlightID < items[j].FlightID
+		}
+		return items[i].DepartureTimestamp < items[j].DepartureTimestamp
+	})
 	return items, nil
 }
 

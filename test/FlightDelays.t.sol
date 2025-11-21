@@ -29,6 +29,9 @@ contract FlightDelaysTest is Test {
 
     bytes32 internal constant AIRLINE_ID = keccak256("ALPHA");
     bytes32 internal constant FLIGHT_ID = keccak256("ALPHA-001");
+    uint48 internal constant POLICY_WINDOW = uint48(2 minutes);
+    uint48 internal constant DELAY_WINDOW = uint48(1 minutes);
+    uint48 internal constant DEPARTURE_OFFSET = uint48(15 minutes);
     uint48 internal departure;
 
     function setUp() public {
@@ -56,8 +59,8 @@ contract FlightDelaysTest is Test {
             collateral: address(stablecoin),
             vaultEpochDuration: uint48(3 days),
             messageExpiry: 12_000,
-            policyWindow: uint48(3 days),
-            delayWindow: uint48(1 days),
+            policyWindow: POLICY_WINDOW,
+            delayWindow: DELAY_WINDOW,
             policyPremium: 5 ether,
             policyPayout: 50 ether
         });
@@ -65,14 +68,14 @@ contract FlightDelaysTest is Test {
         flightDelays.initialize(initParams);
         stablecoin.approve(address(flightDelays), type(uint256).max);
 
-        departure = uint48(block.timestamp + 10 days);
+        departure = uint48(block.timestamp + DEPARTURE_OFFSET);
     }
 
     function testBuyInsuranceAndRecordPolicy() public {
         _createFlight();
         _fundLatestVault(1000 ether);
 
-        vm.warp(departure - 1 days);
+        vm.warp(departure - 2 minutes);
 
         flightDelays.buyInsurance(AIRLINE_ID, FLIGHT_ID);
 
@@ -90,11 +93,11 @@ contract FlightDelaysTest is Test {
         _createFlight();
         _fundLatestVault(1000 ether);
 
-        vm.warp(departure - 1 days);
+        vm.warp(departure - 2 minutes);
 
         flightDelays.buyInsurance(AIRLINE_ID, FLIGHT_ID);
         vm.expectRevert(FlightDelays.FlightAlreadyExists.selector);
-        flightDelays.createFlight(AIRLINE_ID, FLIGHT_ID, departure, 1, "");
+        flightDelays.createFlight(AIRLINE_ID, FLIGHT_ID, departure, FLIGHT_ID, 1, "");
 
         vm.warp(departure + 1);
         flightDelays.delayFlight(AIRLINE_ID, FLIGHT_ID, 1, "");
@@ -111,7 +114,7 @@ contract FlightDelaysTest is Test {
         _createFlight();
         _fundLatestVault(500 ether);
 
-        vm.warp(departure - 1 days);
+        vm.warp(departure - 2 minutes);
 
         flightDelays.buyInsurance(AIRLINE_ID, FLIGHT_ID);
 
@@ -125,7 +128,7 @@ contract FlightDelaysTest is Test {
         MockRewards rewards = rewardsFactory.lastRewards();
         assertEq(rewards.lastAmount(), 5 ether);
         assertEq(rewards.lastToken(), address(stablecoin));
-        assertEq(rewards.lastSnapshot(), departure - uint48(3 days));
+        assertEq(rewards.lastSnapshot(), departure - POLICY_WINDOW);
     }
 
     function testDelayRequiresEarlierFlightsProcessed() public {
@@ -133,8 +136,8 @@ contract FlightDelaysTest is Test {
         _fundLatestVault(1000 ether);
 
         bytes32 laterFlightId = keccak256("ALPHA-200");
-        uint48 laterDeparture = departure + 2 days;
-        flightDelays.createFlight(AIRLINE_ID, laterFlightId, laterDeparture, 1, "");
+        uint48 laterDeparture = departure + 5 minutes;
+        flightDelays.createFlight(AIRLINE_ID, laterFlightId, laterDeparture, FLIGHT_ID, 1, "");
 
         vm.warp(laterDeparture + 1);
         vm.expectRevert(FlightDelays.PreviousFlightIncomplete.selector);
@@ -150,9 +153,18 @@ contract FlightDelaysTest is Test {
 
         bytes32 laterFlightId = keccak256("ALPHA-201");
         vm.expectRevert(FlightDelays.InvalidTimestamp.selector);
-        flightDelays.createFlight(AIRLINE_ID, laterFlightId, departure - 1, 1, "");
+        flightDelays.createFlight(AIRLINE_ID, laterFlightId, departure - 1, FLIGHT_ID, 1, "");
 
-        flightDelays.createFlight(AIRLINE_ID, laterFlightId, departure + 1, 1, "");
+        flightDelays.createFlight(AIRLINE_ID, laterFlightId, departure + 1, FLIGHT_ID, 1, "");
+    }
+
+    function testCreateFlightRequiresSequentialOrdering() public {
+        _createFlight();
+
+        bytes32 secondFlightId = keccak256("ALPHA-202");
+        uint48 secondDeparture = departure + 2 minutes;
+        vm.expectRevert(FlightDelays.InvalidPreviousFlight.selector);
+        flightDelays.createFlight(AIRLINE_ID, secondFlightId, secondDeparture, bytes32(0), 1, "");
     }
 
     function testCannotBuyInsuranceWithoutFlight() public {
@@ -162,7 +174,7 @@ contract FlightDelaysTest is Test {
 
     function testCannotBuyBeforePolicyWindowOpens() public {
         _createFlight();
-        _fundLatestVault(1_000 ether);
+        _fundLatestVault(1000 ether);
 
         vm.warp(departure - uint256(flightDelays.policyWindow()));
         vm.expectRevert(FlightDelays.BuyWindowClosed.selector);
@@ -171,7 +183,7 @@ contract FlightDelaysTest is Test {
 
     function testCannotBuyAfterWindowCloses() public {
         _createFlight();
-        _fundLatestVault(1_000 ether);
+        _fundLatestVault(1000 ether);
 
         uint256 cutoff = departure - uint256(flightDelays.delayWindow()) + 1;
         vm.warp(cutoff);
@@ -181,9 +193,9 @@ contract FlightDelaysTest is Test {
 
     function testCannotBuyOnceFlightDelayed() public {
         _createFlight();
-        _fundLatestVault(1_000 ether);
+        _fundLatestVault(1000 ether);
 
-        vm.warp(departure - 2 days);
+        vm.warp(departure - 2 minutes);
         flightDelays.delayFlight(AIRLINE_ID, FLIGHT_ID, 1, "");
 
         vm.expectRevert(FlightDelays.FlightNotScheduled.selector);
@@ -191,7 +203,7 @@ contract FlightDelaysTest is Test {
     }
 
     function _createFlight() internal {
-        flightDelays.createFlight(AIRLINE_ID, FLIGHT_ID, departure, 1, "");
+        flightDelays.createFlight(AIRLINE_ID, FLIGHT_ID, departure, bytes32(0), 1, "");
     }
 
     function _fundLatestVault(uint256 amount) internal {

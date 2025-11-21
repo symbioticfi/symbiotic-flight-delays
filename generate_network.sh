@@ -131,10 +131,10 @@ generate_docker_compose() {
 services:
   # Main Anvil local Ethereum network (Chain ID: 31337)
   anvil:
-    image: ghcr.io/foundry-rs/foundry:v1.4.3
+    image: ghcr.io/foundry-rs/foundry:v1.4.4
     container_name: symbiotic-anvil
     entrypoint: ["anvil"]
-    command: "--port 8545 --chain-id 31337 --timestamp 1754051800 --auto-impersonate --slots-in-an-epoch 1 --accounts 10 --balance 10000 --gas-limit 30000000 --gas-price 10000000"
+    command: "--port 8545 --chain-id 31337 --auto-impersonate --slots-in-an-epoch 1 --accounts 10 --balance 10000 --gas-limit 30000000 --gas-price 10000000"
     environment:
       - ANVIL_IP_ADDR=0.0.0.0
     ports:
@@ -204,6 +204,19 @@ services:
     networks:
       - symbiotic-network
 
+  ui:
+    build:
+      context: ../ui
+      dockerfile: Dockerfile
+    container_name: symbiotic-ui
+    ports:
+      - "5173:5173"
+    depends_on:
+      flights-api:
+        condition: service_started
+    networks:
+      - symbiotic-network
+
 EOF
 
     local committer_count=0
@@ -258,34 +271,34 @@ EOF
 
 EOF
 
-    done
-
-    FLIGHT_NODE_PRIVATE_KEY_HEX=$(printf "%064x" $BASE_PRIVATE_KEY)
+    local relay_port=$((relay_start_port + i - 1))
+    local sum_port=$((sum_start_port + i - 1))
 
     cat >> "$network_dir/docker-compose.yml" << EOF
 
-  flight-node:
+  flight-node-$i:
     build:
       context: ../off-chain
       dockerfile: Dockerfile
-    container_name: symbiotic-flight-node
+    container_name: symbiotic-flight-node-$i
     entrypoint: ["/workspace/network-scripts/flight-node-start.sh"]
-    command: ["relay-sidecar-1:8080", "$FLIGHT_NODE_PRIVATE_KEY_HEX"]
+    command: ["relay-sidecar-$i:8080", "$SYMB_PRIVATE_KEY_HEX"]
     environment:
       - FLIGHTS_API_URL=http://flights-api:8085
     volumes:
       - ../:/workspace
       - ./deploy-data:/deploy-data
+    ports:
+      - "$sum_port:8080"
     depends_on:
-      relay-sidecar-1:
-        condition: service_started
-      flights-api:
+      relay-sidecar-$i:
         condition: service_started
     networks:
       - symbiotic-network
     restart: unless-stopped
 
 EOF
+    done
 
     cat >> "$network_dir/docker-compose.yml" << EOF
 
