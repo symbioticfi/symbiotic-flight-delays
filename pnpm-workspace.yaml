@@ -1,3 +1,7 @@
+packages:
+  - .
+  - ui
+
 onlyBuiltDependencies:
   - '@reown/appkit'
   - bufferutil
