@@ -3,7 +3,8 @@ packages:
   - ui
 
 onlyBuiltDependencies:
-  - '@reown/appkit'
+  - "@reown/appkit"
   - bufferutil
+  - esbuild
   - keccak
   - utf-8-validate
