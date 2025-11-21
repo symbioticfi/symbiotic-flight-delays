@@ -34,6 +34,8 @@ The original super-sum example has been entirely replaced by this flight-delay f
 ## Installation
 
 ```bash
+git clone --recurse-submodules https://github.com/symbioticfi/symbiotic-flight-delays.git
+cd symbiotic-flight-delays
 pnpm install
 cd off-chain && go mod tidy
 cd ../ui && pnpm install
@@ -57,6 +59,12 @@ cd ..
    ```
 
 The compose stack now includes the mock flights API and the off-chain node, so flights are mirrored on-chain automatically without any extra processes.
+
+## UI
+
+The UI surfaces a compact list of flights plus basic provider controls (approve collateral, buy coverage, claim after delays, inspect vault balances, deposit/withdraw, claim rewards).
+
+Available at `http://localhost:5173`
 
 ## Services
 
@@ -93,12 +101,6 @@ All endpoints below are served by the mock Flights API (`http://localhost:8085` 
 - `POST /airlines/{airlineId}/flights` – create/schedule a new flight (`flightId`, `departureTimestamp`).
 - `POST /airlines/{airlineId}/flights/{flightId}/delay` – mark a flight as delayed.
 - `POST /airlines/{airlineId}/flights/{flightId}/depart` – mark a flight as departed.
-
-## UI
-
-The UI surfaces a compact list of flights plus basic provider controls (approve collateral, buy coverage, claim after delays, inspect vault balances, deposit/withdraw, claim rewards).
-
-Available at `http://localhost:5173`
 
 ## Local Deployments
 
