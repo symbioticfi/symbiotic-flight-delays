@@ -1,17 +1,17 @@
 No files changed, compilation skipped
 
 Ran 10 tests for test/FlightDelays.t.sol:FlightDelaysTest
-[PASS] testBuyInsuranceAndRecordPolicy() (gas: 1194000)
-[PASS] testCannotBuyAfterWindowCloses() (gas: 1069607)
-[PASS] testCannotBuyBeforePolicyWindowOpens() (gas: 1069210)
+[PASS] testBuyInsuranceAndRecordPolicy() (gas: 1193983)
+[PASS] testCannotBuyAfterWindowCloses() (gas: 1069590)
+[PASS] testCannotBuyBeforePolicyWindowOpens() (gas: 1069193)
 [PASS] testCannotBuyInsuranceWithoutFlight() (gas: 32987)
-[PASS] testCannotBuyOnceFlightDelayed() (gas: 1111809)
-[PASS] testCompleteFlightDistributesRewards() (gas: 1507659)
-[PASS] testCreateFlightRequiresSequentialOrdering() (gas: 944855)
-[PASS] testDelayFlightAndClaim() (gas: 1437283)
-[PASS] testDelayRequiresEarlierFlightsProcessed() (gas: 1276844)
-[PASS] testFlightsMustBeCreatedWithNonDecreasingTimestamp() (gas: 1042931)
-Suite result: ok. 10 passed; 0 failed; 0 skipped; finished in 1.01ms (2.39ms CPU time)
+[PASS] testCannotBuyOnceFlightDelayed() (gas: 1111461)
+[PASS] testCompleteFlightDistributesRewards() (gas: 1507642)
+[PASS] testCreateFlightRequiresSequentialOrdering() (gas: 944838)
+[PASS] testDelayFlightAndClaim() (gas: 1436930)
+[PASS] testDelayRequiresEarlierFlightsProcessed() (gas: 1276496)
+[PASS] testFlightsMustBeCreatedWithNonDecreasingTimestamp() (gas: 1042914)
+Suite result: ok. 10 passed; 0 failed; 0 skipped; finished in 1.16ms (2.45ms CPU time)
 
 ╭-----------------------------------------------+-----------------+-------+--------+-------+---------╮
 | script/mocks/MockERC20.sol:MockERC20 Contract |                 |       |        |       |         |
@@ -38,7 +38,7 @@ Suite result: ok. 10 passed; 0 failed; 0 skipped; finished in 1.01ms (2.39ms CPU
 +===================================================================================================+
 | Deployment Cost                            | Deployment Size |        |        |        |         |
 |--------------------------------------------+-----------------+--------+--------+--------+---------|
-| 0                                          | 11124           |        |        |        |         |
+| 0                                          | 11085           |        |        |        |         |
 |--------------------------------------------+-----------------+--------+--------+--------+---------|
 |                                            |                 |        |        |        |         |
 |--------------------------------------------+-----------------+--------+--------+--------+---------|
@@ -50,9 +50,9 @@ Suite result: ok. 10 passed; 0 failed; 0 skipped; finished in 1.01ms (2.39ms CPU
 |--------------------------------------------+-----------------+--------+--------+--------+---------|
 | claimInsurance                             | 52798           | 52798  | 52798  | 52798  | 1       |
 |--------------------------------------------+-----------------+--------+--------+--------+---------|
-| createFlight                               | 40183           | 596540 | 893221 | 893221 | 14      |
+| createFlight                               | 40183           | 596529 | 893204 | 893204 | 14      |
 |--------------------------------------------+-----------------+--------+--------+--------+---------|
-| delayFlight                                | 42441           | 73778  | 50481  | 151709 | 4       |
+| delayFlight                                | 42441           | 73528  | 50150  | 151373 | 4       |
 |--------------------------------------------+-----------------+--------+--------+--------+---------|
 | delayWindow                                | 2407            | 2407   | 2407   | 2407   | 1       |
 |--------------------------------------------+-----------------+--------+--------+--------+---------|
@@ -184,4 +184,4 @@ Suite result: ok. 10 passed; 0 failed; 0 skipped; finished in 1.01ms (2.39ms CPU
 ╰------------------------------------------------------+-----------------+------+--------+------+---------╯
 
 
-Ran 1 test suite in 3.45ms (1.01ms CPU time): 10 tests passed, 0 failed, 0 skipped (10 total tests)
+Ran 1 test suite in 3.63ms (1.16ms CPU time): 10 tests passed, 0 failed, 0 skipped (10 total tests)

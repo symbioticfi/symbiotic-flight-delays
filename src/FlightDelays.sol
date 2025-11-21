@@ -242,16 +242,17 @@ contract FlightDelays is NetworkManager {
         flight.status = FlightStatus.DELAYED;
 
         Airline storage airline = airlines[airlineId];
-        airline.covered -= flight.policiesSold * policyPayout;
-
         uint256 coverage = flight.policiesSold * policyPayout;
+
         if (coverage > 0) {
-            (bool success, bytes memory response) = IBaseSlashing(votingPowers)
+            (bool success,) = IBaseSlashing(votingPowers)
                 .slashVault(flight.timestamp - policyWindow, airline.vault, address(this), coverage, new bytes(0));
             if (!success) {
                 revert SlashFailed();
             }
         }
+
+        airline.covered -= coverage;
 
         emit FlightDelayed(airlineId, flightId);
     }
@@ -354,7 +355,7 @@ contract FlightDelays is NetworkManager {
             return;
         }
 
-        (address vault, address delegator,) = IVaultConfigurator(VAULT_CONFIGURATOR)
+        (address vault,,) = IVaultConfigurator(VAULT_CONFIGURATOR)
             .create(
                 IVaultConfigurator.InitParams({
                     version: 1,
